@@ -155,6 +155,26 @@ class ToolsTest extends Base
         $this->assertNotFound($this->tool(SearchTasksTool::class, $this->scope($this->user('otto')))->execute(['query' => 'login']));
     }
 
+    public function testSearchTasksWithNoWordsListsTheNewestOpenTasks(): void
+    {
+        $old = $this->task($this->room, 'Old open task');
+        $new = $this->task($this->room, 'New open task');
+        $this->container['db']->table('tasks')->eq('id', $old)->update(['date_modification' => time() - 3600]);
+        $closed = $this->task($this->room, 'Closed task');
+        $this->container['taskStatusModel']->close($closed);
+        $this->task($this->other, 'Other project task');
+        $search = $this->tool(SearchTasksTool::class);
+
+        foreach (['*', '%', '?', '', '   ', '* ?'] as $query) {
+            $results = $this->json($search->execute(['query' => $query]))['results'];
+            $this->assertSame([$new, $old], array_column($results, 'task_id'), "query '$query'");
+        }
+        $this->assertSame([$new], array_column($this->json($search->execute(['query' => '*', 'limit' => 1]))['results'], 'task_id'));
+        $this->assertSame([$closed], array_column($this->json($search->execute(['query' => '*', 'status' => 'closed']))['results'], 'task_id'), 'an explicit status still applies');
+        $this->assertStringContainsString('empty', $search->description(), 'the model is told how to list tasks');
+        $this->assertNotFound($this->tool(SearchTasksTool::class, $this->scope($this->user('otto')))->execute(['query' => '*']));
+    }
+
     public function testSearchCommentsLimit(): void
     {
         $id = $this->task($this->room, 'Fix login');
@@ -359,8 +379,11 @@ class ToolsTest extends Base
         $this->task($this->room, 'snake_case');
         $this->comment($this->task($this->room, 'Other'), '50% off_peak');
 
+        // A metacharacter is never a pattern: for tasks it is a query with no words, which
+        // lists the newest open tasks exactly as an empty query does.
+        $listing = $this->json($this->tool(SearchTasksTool::class)->execute(['query' => '']))['results'];
         foreach (['%', '_', '%_%', '\\'] as $query) {
-            $this->assertSame([], $this->json($this->tool(SearchTasksTool::class)->execute(['query' => $query]))['results'], $query);
+            $this->assertSame(array_column($listing, 'task_id'), array_column($this->json($this->tool(SearchTasksTool::class)->execute(['query' => $query]))['results'], 'task_id'), $query);
             $this->assertSame([], $this->json($this->tool(SearchCommentsTool::class)->execute(['query' => $query]))['results'], $query);
         }
         $this->assertCount(1, $this->json($this->tool(SearchTasksTool::class)->execute(['query' => '100%']))['results'], 'the word still matches');

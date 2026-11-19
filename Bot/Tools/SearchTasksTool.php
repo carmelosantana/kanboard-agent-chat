@@ -10,7 +10,12 @@ use Kanboard\Model\ColumnModel;
 use Kanboard\Model\TaskModel;
 use Kanboard\Model\UserModel;
 
-/** Open and closed tasks of the room's project whose title or description has every query word; in a task drawer, that task first. */
+/**
+ * Open and closed tasks of the room's project whose title or description has every query word;
+ * in a task drawer, that task first. A query with no words (empty, or only `*`, `%`, `?` and
+ * the like) lists the most recently updated open tasks instead, so "which tasks are there?"
+ * has an answer.
+ */
 class SearchTasksTool extends ReadOnlyTool
 {
     public const MAX_LIMIT = 10;
@@ -22,13 +27,13 @@ class SearchTasksTool extends ReadOnlyTool
 
     public function description(): string
     {
-        return 'Search this project\'s tasks by words in the title or description (every word must match). Returns task ids for get_task.';
+        return 'Search this project\'s tasks by words in the title or description (every word must match). An empty query lists the most recently updated open tasks. Returns task ids for get_task.';
     }
 
     public function parameters(): array
     {
         return [
-            new StringParameter('query', 'Words to look for.', true, maxLength: self::MAX_QUERY),
+            new StringParameter('query', 'Words to look for; empty to list the newest open tasks.', true, maxLength: self::MAX_QUERY),
             new EnumParameter('status', 'Task status; default all.', ['open', 'closed', 'all'], false),
             new NumberParameter('limit', 'Most results to return; default '.self::MAX_LIMIT.'.', false, integer: true, minimum: 1, maximum: self::MAX_LIMIT),
         ];
@@ -36,10 +41,7 @@ class SearchTasksTool extends ReadOnlyTool
 
     protected function run(array $input): ToolResult
     {
-        $words = self::words($input['query']);
-        if ($words === []) {
-            return $this->result(['results' => []]);
-        }
+        $words = self::words((string) ($input['query'] ?? ''));
 
         $query = $this->scope->container()['db']->table(TaskModel::TABLE)
             ->columns(
@@ -60,7 +62,7 @@ class SearchTasksTool extends ReadOnlyTool
                 ->ilike(TaskModel::TABLE.'.description', '%'.$word.'%')
                 ->closeOr();
         }
-        $status = $input['status'] ?? 'all';
+        $status = $input['status'] ?? ($words === [] ? 'open' : 'all');
         if ($status !== 'all') {
             $query->eq(TaskModel::TABLE.'.is_active', $status === 'open' ? TaskModel::STATUS_OPEN : TaskModel::STATUS_CLOSED);
         }
