@@ -9,7 +9,7 @@ use Kanboard\Core\Base;
 use Kanboard\Core\Markdown;
 
 /**
- * chatparts' view of Kanboard: routes, CSRF, translation, markdown and asset URLs.
+ * chatparts' view of Kanboard: routes, CSRF, translation, markdown, asset URLs and the viewer.
  *
  * Escaping is the kit's job: t() hands arguments to Kanboard's translator unescaped (e(), not
  * t(), which would escape them a second time), and markdown() returns HTML that is already
@@ -93,6 +93,14 @@ class KanboardHost extends Base implements HostAdapter
     public function assetUrl(string $file): string
     {
         return $this->helper->url->dir().self::ASSET_DIR.$file;
+    }
+
+    /** The logged-in user's participant id (ParticipantResolver's format: the user id); null when nobody is. */
+    public function viewerId(): ?string
+    {
+        $id = (int) $this->userSession->getId();
+
+        return $id > 0 ? (string) $id : null;
     }
 
     /** An attribute's value from Parsedown's output, entities decoded once (as the browser does); null when absent. */

@@ -201,7 +201,7 @@ class BotRunner extends Base
             'finish_reason' => $finishReason,
             'duration_ms' => $durationMs,
             'usage' => ['prompt_tokens' => $usage->promptTokens, 'completion_tokens' => $usage->completionTokens, 'total_tokens' => $usage->totalTokens],
-            'asked_by' => ['name' => (string) (($asker['name'] ?? '') ?: ($asker['username'] ?? '')), 'role' => $this->roleLabel($askerId, $projectId)],
+            'asked_by' => ['id' => (string) $askerId, 'name' => (string) (($asker['name'] ?? '') ?: ($asker['username'] ?? '')), 'role' => $this->roleLabel($askerId, $projectId)],
         ];
         if ($token->stopRequest() === DbCancellationToken::STOPPED_BY_ASKER && $status === MessageStatus::Stopped) {
             $metadata['stopped_by'] = $metadata['asked_by']['name'];

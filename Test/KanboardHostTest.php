@@ -93,6 +93,17 @@ class KanboardHostTest extends Base
         $this->assertStringNotContainsString('&amp;amp;', $html);
     }
 
+    public function testViewerIdIsTheLoggedInUsersParticipantId(): void
+    {
+        $this->assertNull($this->host->viewerId(), 'nobody logged in');
+
+        $userId = (int) $this->container['userModel']->create(['username' => 'ana', 'name' => 'Ana']);
+        $this->container['userSession']->initialize($this->container['userModel']->getById($userId));
+
+        $this->assertSame((string) $userId, $this->host->viewerId());
+        $this->assertSame((string) $userId, (new Kanboard\Plugin\AgentChat\Model\ParticipantResolver($this->container))->forUser($userId)->id, 'the same id format as participants');
+    }
+
     public function testEscape(): void
     {
         $this->assertSame('&lt;a href=&quot;x&quot;&gt;&amp;&#039;', $this->host->escape('<a href="x">&\''));

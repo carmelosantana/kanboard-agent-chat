@@ -172,7 +172,7 @@ class BotRunnerTest extends Base
         $this->assertSame('fake-model', $meta['model']);
         $this->assertSame('stop', $meta['finish_reason']);
         $this->assertSame(0, $meta['tool_count']);
-        $this->assertSame(['name' => 'Ana', 'role' => 'Project Member'], $meta['asked_by']);
+        $this->assertSame(['id' => (string) $this->asker, 'name' => 'Ana', 'role' => 'Project Member'], $meta['asked_by']);
         $this->assertSame('Project bot', $meta['bot']);
         $this->assertSame(['prompt_tokens' => 10, 'completion_tokens' => 5, 'total_tokens' => 15], $meta['usage']);
         $this->assertIsInt($meta['duration_ms']);
@@ -299,6 +299,7 @@ class BotRunnerTest extends Base
         $this->assertSame('Partial answer', $this->text($final));
         $this->assertSame('stopped', $final->metadata['finish_reason']);
         $this->assertSame('Ana', $final->metadata['stopped_by']);
+        $this->assertSame((string) $this->asker, $final->metadata['asked_by']['id'], 'the receipt tells the asker apart from other viewers');
         $this->assertSame('stopped', $this->runRow($runId)['status']);
     }
 
