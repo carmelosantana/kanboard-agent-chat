@@ -68,8 +68,8 @@ class StreamControllerTest extends Base
     /** The asker's question and a pending run, as RoomController::send() leaves them. */
     private function ask(int $userId, string $question = '@bot hello?'): array
     {
-        (new MessageModel($this->container))->create($this->room, (new \Kanboard\Plugin\AgentChat\Model\ParticipantResolver($this->container))->forUser($userId), [new \ChatParts\Model\Part\TextPart('t1', $question)]);
-        return (new RunModel($this->container))->ask($this->room, $userId);
+        $questionId = (new MessageModel($this->container))->create($this->room, (new \Kanboard\Plugin\AgentChat\Model\ParticipantResolver($this->container))->forUser($userId), [new \ChatParts\Model\Part\TextPart('t1', $question)]);
+        return (new RunModel($this->container))->ask($this->room, $userId, $questionId);
     }
 
     /**

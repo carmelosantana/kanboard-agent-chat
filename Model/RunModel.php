@@ -22,6 +22,14 @@ use Kanboard\Plugin\AgentChat\Bot\DbCancellationToken;
  * an API reader (MessageModel::listSettledAfter) for longer than that.
  *
  * The stream id itself is never stored, only its sha256.
+ *
+ * One run per question: the bot's draft replies to the asker's message (reply_to), and asking
+ * again for a message that already has one (a retried send with the same client_msg_id) gets
+ * that run back, with no sid, whatever the limits say. A send that was refused by a limit left
+ * no draft, so its retry may start the run once the limits allow. This is a guarded check, not
+ * a constraint: agentchat_runs.message_id is the bot's draft, which a retry would create anew,
+ * and a unique index on the draft's reply_to needs a partial index MySQL lacks. Two retries in
+ * the same instant are also held back by the one-answer-per-user limit.
  */
 class RunModel extends Base
 {
@@ -30,32 +38,48 @@ class RunModel extends Base
     private const ACTIVE = ['pending', 'running'];
 
     /**
-     * The bot's draft (submitted, empty) and a pending run for it, once the limits allow.
+     * The bot's draft (submitted, empty, replying to $questionId) and a pending run for it,
+     * once the limits allow. A question that already has a draft and run gets those back with
+     * sid null.
      *
-     * @return array{run_id: int, sid: string, message_id: int}
+     * @return array{run_id: int, sid: ?string, message_id: int}
      * @throws RateLimited|Busy
      */
-    public function ask(int $roomId, int $askedBy): array
+    public function ask(int $roomId, int $askedBy, int $questionId): array
     {
+        $draftId = $this->db->table(MessageModel::TABLE)
+            ->eq('room_id', $roomId)
+            ->eq('sender_kind', 'bot')
+            ->eq('reply_to', $questionId)
+            ->asc('id')
+            ->findOneColumn('id');
+        if ($draftId && ($runId = $this->runFor((int) $draftId)) !== null) {
+            return ['run_id' => $runId, 'sid' => null, 'message_id' => (int) $draftId];
+        }
+
         $this->assertAllowed($askedBy);
         $messageId = (new MessageModel($this->container))->create(
             $roomId,
             (new ParticipantResolver($this->container))->bot(),
             [],
-            ['status' => MessageStatus::Submitted->value],
+            ['status' => MessageStatus::Submitted->value, 'reply_to' => $questionId],
         );
         return $this->insert($messageId, $roomId, $askedBy) + ['message_id' => $messageId];
     }
 
     /**
      * A pending run for the bot message $messageId, once the limits allow. sid is 32 random
-     * bytes as hex; only its hash is stored.
+     * bytes as hex; only its hash is stored. A message that already has a run gets it back
+     * with sid null.
      *
-     * @return array{run_id: int, sid: string}
+     * @return array{run_id: int, sid: ?string}
      * @throws RateLimited|Busy
      */
     public function start(int $messageId, int $roomId, int $askedBy): array
     {
+        if (($runId = $this->runFor($messageId)) !== null) {
+            return ['run_id' => $runId, 'sid' => null];
+        }
         $this->assertAllowed($askedBy);
         return $this->insert($messageId, $roomId, $askedBy);
     }
@@ -156,6 +180,12 @@ class RunModel extends Base
             'metadata' => ['bot' => (new ParticipantResolver($this->container))->bot()->name, 'finish_reason' => 'error'],
         ]);
         return true;
+    }
+
+    private function runFor(int $messageId): ?int
+    {
+        $id = $this->db->table(self::TABLE)->eq('message_id', $messageId)->asc('id')->findOneColumn('id');
+        return $id ? (int) $id : null;
     }
 
     /** @throws RateLimited|Busy */

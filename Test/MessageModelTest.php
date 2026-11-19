@@ -176,7 +176,8 @@ class MessageModelTest extends Base
             'status unknown' => [['status' => 'queued']],
             'private without owner' => [['visibility' => 'private']],
             'room with private_to' => [['private_to' => 2]],
-            'unknown option' => [['reply_to' => 1]],
+            'unknown option' => [['sender_kind' => 'bot']],
+            'reply_to not a positive id' => [['reply_to' => 0]],
         ];
     }
 

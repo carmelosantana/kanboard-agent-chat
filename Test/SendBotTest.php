@@ -89,9 +89,9 @@ class SendBotTest extends Base
         return $out;
     }
 
-    private function send(string $text, bool $htmx = true): array
+    private function send(string $text, bool $htmx = true, ?string $clientMsgId = null): array
     {
-        return $this->call('send', ['csrf_token' => $this->container['token']->getCSRFToken(), 'message' => $text], $htmx);
+        return $this->call('send', ['csrf_token' => $this->container['token']->getCSRFToken(), 'message' => $text] + ($clientMsgId === null ? [] : ['client_msg_id' => $clientMsgId]), $htmx);
     }
 
     private function runs(): array
@@ -251,6 +251,40 @@ class SendBotTest extends Base
         $this->assertSame('error', $this->runs()[0]['status']);
     }
 
+    public function testWebRetryWithTheSameClientMsgIdNeverStartsASecondRun(): void
+    {
+        $this->loginAs($this->member);
+        $this->send('@bot hello?', clientMsgId: 'web-1');
+
+        $out = $this->send('@bot hello?', clientMsgId: 'web-1');
+
+        $this->assertSame(200, $out['status']);
+        $this->assertCount(1, $this->runs());
+        $this->assertCount(2, $this->messages(), 'the question and one bot draft');
+        $draft = $this->messages()[1];
+        $this->assertStringContainsString('id="cp-msg-'.$draft['id'].'"', $out['body'], 'the existing answer is shown');
+        $this->assertStringNotContainsString('sse-connect', $out['body'], 'its stream belongs to the first response');
+    }
+
+    public function testWebRetryAfterA429StartsOneRunOnceLimitsAllow(): void
+    {
+        $this->loginAs($this->member);
+        $this->send('@bot first?', clientMsgId: 'a');
+        $this->assertSame(429, $this->send('@bot second?', clientMsgId: 'b')['status']);
+        $this->assertCount(1, $this->runs());
+        $this->container['db']->table(RunModel::TABLE)->update(['status' => 'done']);
+
+        $retry = $this->send('@bot second?', clientMsgId: 'b');
+        $again = $this->send('@bot second?', clientMsgId: 'b');
+
+        $this->assertSame(200, $retry['status']);
+        $this->assertStringContainsString('sse-connect', $retry['body']);
+        $this->assertSame(200, $again['status']);
+        $this->assertStringNotContainsString('sse-connect', $again['body']);
+        $this->assertCount(2, $this->runs());
+        $this->assertCount(2, array_filter($this->messages(), fn ($m) => $m['sender_kind'] === 'human'));
+    }
+
     // ---- stop -------------------------------------------------------------------------------
 
     public function testStopRequiresCsrf(): void
@@ -342,10 +376,41 @@ class SendBotTest extends Base
 
     // ---- JSON-RPC ---------------------------------------------------------------------------
 
-    private function rpcSend(int $userId, string $body): array
+    private function rpcSend(int $userId, string $body, string $clientMsgId = ''): array
     {
         $this->loginAs($userId);
-        return (new AgentChatRoomProcedure($this->container))->chatSendMessage($this->project, $body);
+        return (new AgentChatRoomProcedure($this->container))->chatSendMessage($this->project, $body, $clientMsgId);
+    }
+
+    public function testApiRetryWithTheSameClientMsgIdNeverStartsASecondRun(): void
+    {
+        $provider = new FakeProvider([[FakeProvider::text('Once.')], [FakeProvider::text('Twice?')]]);
+        $this->container[BotRunner::PROVIDER_OVERRIDE] = $provider;
+        $first = $this->rpcSend($this->member, '@bot status?', 'retry-1');
+
+        $again = $this->rpcSend($this->member, '@bot status?', 'retry-1');
+
+        $this->assertSame($first, $again, 'the same message and the same answer');
+        $this->assertCount(1, $this->runs());
+        $this->assertCount(1, $provider->calls);
+    }
+
+    public function testApiRetryAfterALimitStartsTheRunOnceLimitsAllow(): void
+    {
+        $this->container[BotRunner::PROVIDER_OVERRIDE] = new FakeProvider([[FakeProvider::text('One.')], [FakeProvider::text('Two.')], [FakeProvider::text('Three?')]]);
+        $this->container['configModel']->save([LimitsSettings::QUESTIONS_PER_HOUR => '1']);
+        $this->rpcSend($this->member, '@bot one?', 'q1');
+        $refused = $this->rpcSend($this->member, '@bot two?', 'q2');
+        $this->assertNull($refused['bot_message_id']);
+
+        $this->container['configModel']->save([LimitsSettings::QUESTIONS_PER_HOUR => '30']);
+        $retried = $this->rpcSend($this->member, '@bot two?', 'q2');
+        $again = $this->rpcSend($this->member, '@bot two?', 'q2');
+
+        $this->assertSame($refused['message_id'], $retried['message_id']);
+        $this->assertIsInt($retried['bot_message_id']);
+        $this->assertSame($retried, $again);
+        $this->assertCount(2, $this->runs());
     }
 
     public function testApiMentionIsAnsweredWithinTheRequest(): void

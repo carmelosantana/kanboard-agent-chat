@@ -38,7 +38,8 @@ class RoomApi extends RpcCall
      *
      * A body mentioning @bot from a user who may ask, while the project's bot gate is open, is
      * answered within this request (no stream; up to the run time limit) and bot_message_id
-     * names the answer, whatever its status. Over a run limit the message is still stored,
+     * names the answer, whatever its status. A retry with the same client_msg_id gets the same
+     * answer back; it never starts a second run. Over a run limit the message is still stored,
      * bot_message_id is null and bot_error says why. Without the right or the gate the
      * result is the message id alone.
      *
@@ -68,7 +69,7 @@ class RoomApi extends RpcCall
                 return ['message_id' => $id];
             }
             try {
-                $turn = (new RunModel($this->container))->ask((int) $room['id'], $userId);
+                $turn = (new RunModel($this->container))->ask((int) $room['id'], $userId, $id);
             } catch (RateLimited|Busy $e) {
                 return ['message_id' => $id, 'bot_message_id' => null, 'bot_error' => $e->getMessage()];
             }

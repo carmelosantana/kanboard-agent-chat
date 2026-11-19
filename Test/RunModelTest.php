@@ -46,6 +46,11 @@ class RunModelTest extends Base
         return (new MessageModel($this->container))->create($this->room, (new ParticipantResolver($this->container))->bot(), [], ['status' => MessageStatus::Submitted->value]);
     }
 
+    private function question(int $userId): int
+    {
+        return (new MessageModel($this->container))->create($this->room, (new ParticipantResolver($this->container))->forUser($userId), [new TextPart('t1', '@bot hi?')]);
+    }
+
     private function row(int $runId): array
     {
         return $this->container['db']->table(RunModel::TABLE)->eq('id', $runId)->findOne();
@@ -140,7 +145,7 @@ class RunModelTest extends Base
 
     public function testAskCreatesTheBotDraftAndAPendingRun(): void
     {
-        $turn = $this->runs->ask($this->room, $this->users[0]);
+        $turn = $this->runs->ask($this->room, $this->users[0], $this->question($this->users[0]));
 
         $draft = (new MessageModel($this->container))->getById($turn['message_id']);
         $this->assertSame('bot', $draft['sender_kind']);
@@ -150,15 +155,44 @@ class RunModelTest extends Base
 
     public function testAskOverALimitCreatesNoDraft(): void
     {
-        $this->runs->ask($this->room, $this->users[0]);
+        $this->runs->ask($this->room, $this->users[0], $this->question($this->users[0]));
+        $question = $this->question($this->users[0]);
         $before = $this->container['db']->table(MessageModel::TABLE)->count();
 
         try {
-            $this->runs->ask($this->room, $this->users[0]);
+            $this->runs->ask($this->room, $this->users[0], $question);
             $this->fail('expected Busy');
         } catch (Busy) {
         }
         $this->assertSame($before, $this->container['db']->table(MessageModel::TABLE)->count());
+    }
+
+    public function testOneRunPerQuestion(): void
+    {
+        $question = $this->question($this->users[0]);
+        $first = $this->runs->ask($this->room, $this->users[0], $question);
+
+        $again = $this->runs->ask($this->room, $this->users[0], $question);
+
+        $this->assertSame($first['run_id'], $again['run_id']);
+        $this->assertSame($first['message_id'], $again['message_id']);
+        $this->assertNull($again['sid'], 'the stream id of the existing run is not handed out again');
+        $this->assertSame(1, $this->container['db']->table(RunModel::TABLE)->count());
+        $this->assertSame($question, (int) (new MessageModel($this->container))->getById($first['message_id'])['reply_to']);
+        // The per-user limit would refuse a new run here; an existing run is returned regardless.
+        $this->setRun($first['run_id'], ['status' => 'done']);
+        $this->assertSame($first['run_id'], $this->runs->ask($this->room, $this->users[0], $question)['run_id']);
+    }
+
+    public function testStartReturnsTheExistingRunOfAMessage(): void
+    {
+        $draft = $this->draft();
+        $first = $this->runs->start($draft, $this->room, $this->users[0]);
+
+        $again = $this->runs->start($draft, $this->room, $this->users[0]);
+
+        $this->assertSame(['run_id' => $first['run_id'], 'sid' => null], $again);
+        $this->assertSame(1, $this->container['db']->table(RunModel::TABLE)->count());
     }
 
     // ---- claim ----------------------------------------------------------------------------
@@ -257,7 +291,7 @@ class RunModelTest extends Base
         $messages = new MessageModel($this->container);
 
         // ask() reaps too, so every run exists before any is made stale.
-        [$stalePending, $staleRunning, $fresh, $done] = array_map(fn (int $u): array => $this->runs->ask($this->room, $u), array_slice($this->users, 0, 4));
+        [$stalePending, $staleRunning, $fresh, $done] = array_map(fn (int $u): array => $this->runs->ask($this->room, $u, $this->question($u)), array_slice($this->users, 0, 4));
         $this->setRun($stalePending['run_id'], ['started_at' => $cutoff - 1]);
         $this->setRun($staleRunning['run_id'], ['status' => 'running', 'started_at' => $cutoff - 5]);
         $this->setRun($fresh['run_id'], ['status' => 'running', 'started_at' => $cutoff + 5]);

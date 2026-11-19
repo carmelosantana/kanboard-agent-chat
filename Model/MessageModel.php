@@ -27,7 +27,7 @@ class MessageModel extends Base
     public const MAX_REQUEST_BYTES = 65536;
     public const SENDER_KINDS = ['human', 'agent', 'bot', 'system'];
     public const VISIBILITIES = ['room', 'private'];
-    private const OPTIONS = ['client_msg_id', 'visibility', 'private_to', 'task_id', 'status', 'metadata'];
+    private const OPTIONS = ['client_msg_id', 'visibility', 'private_to', 'task_id', 'reply_to', 'status', 'metadata'];
     private const CLIENT_MSG_ID = '/^[A-Za-z0-9_-]{1,64}$/';
 
     /** @var array<int, string> user id => display name, per instance */
@@ -62,7 +62,7 @@ class MessageModel extends Base
      * id and changes nothing.
      *
      * @param list<Part> $parts
-     * @param array{client_msg_id?: string, visibility?: string, private_to?: int, task_id?: int, status?: string, metadata?: array} $opts
+     * @param array{client_msg_id?: string, visibility?: string, private_to?: int, task_id?: int, reply_to?: int, status?: string, metadata?: array} $opts
      */
     public function create(int $roomId, Participant $p, array $parts, array $opts = []): int
     {
@@ -94,6 +94,7 @@ class MessageModel extends Base
             throw new InvalidArgumentException('A private message from a person must be addressed to that person.');
         }
         $taskId = isset($opts['task_id']) ? $this->positiveInt($opts['task_id'], 'task_id') : null;
+        $replyTo = isset($opts['reply_to']) ? $this->positiveInt($opts['reply_to'], 'reply_to') : null;
         $status = $this->status($opts['status'] ?? MessageStatus::Done->value);
         $metadata = isset($opts['metadata']) ? $this->encodeMetadata($opts['metadata']) : null;
 
@@ -114,6 +115,7 @@ class MessageModel extends Base
             'metadata' => $metadata,
             'client_msg_id' => $clientMsgId,
             'task_id' => $taskId,
+            'reply_to' => $replyTo,
             'created_at' => $now,
             'updated_at' => $now,
         ]);

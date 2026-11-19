@@ -31,7 +31,8 @@ use Kanboard\Plugin\AgentChat\Model\RunModel;
  * bot gate is open, also gets the bot's draft and a run: the response carries the draft wired
  * to its stream (SseSink::draftBubble), for the asker only. Without that right or gate the
  * message is just a message. Over a run limit the message is still stored and the response is
- * a Notice (429). Poll and send reap stale runs first.
+ * a Notice (429). A retry with the same client_msg_id never starts a second run: it gets the
+ * existing answer's bubble, without a stream. Poll and send reap stale runs first.
  */
 class RoomController extends BaseController
 {
@@ -139,7 +140,7 @@ class RoomController extends BaseController
         $limit = null;
         if (Mention::ofBot($body) && $policy->canAsk($userId, $projectId) && AiGate::isOpenFor($this->container, $projectId)) {
             try {
-                $turn = $runs->ask((int) $room['id'], $userId);
+                $turn = $runs->ask((int) $room['id'], $userId, $id);
             } catch (RateLimited|Busy $e) {
                 $limit = $e->getMessage();
             }
@@ -155,9 +156,12 @@ class RoomController extends BaseController
         }
 
         $html = $this->bubbles($messages, [$messages->getById($id)]);
-        if ($turn !== null) {
+        if ($turn !== null && $turn['sid'] !== null) {
             $host = new KanboardHost($this->container);
             $html .= SseSink::draftBubble($host, $messages->toChatPartsMessage($messages->getById($turn['message_id'])), $turn['run_id'], $host->url('stream', ['sid' => $turn['sid']]));
+        } elseif ($turn !== null) {
+            // A retried send: the answer already exists and streams to the first response only.
+            $html .= $this->bubbles($messages, [$messages->getById($turn['message_id'])]);
         }
         if ($limit !== null) {
             $this->response->html($html.new Notice(new KanboardHost($this->container), 'warning', $limit), 429);
