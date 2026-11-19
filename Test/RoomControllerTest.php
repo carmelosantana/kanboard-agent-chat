@@ -30,6 +30,8 @@ class RoomControllerTest extends Base
         require_once __DIR__."/../Schema/$driver.php";
         \Kanboard\Plugin\AgentChat\Schema\version_1($this->container['db']->getConnection());
         $this->container['logger'] = $this->createMock(\Psr\Log\LoggerInterface::class);
+        // tests/units/Base.php doesn't register ApiProvider; initialize() needs $this->api.
+        $this->container->register(new \Kanboard\ServiceProvider\ApiProvider());
         (new Plugin($this->container))->initialize();
 
         $this->projectA = (int) $this->container['projectModel']->create(['name' => 'Website']);

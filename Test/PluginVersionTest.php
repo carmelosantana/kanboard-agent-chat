@@ -37,6 +37,8 @@ class PluginVersionTest extends Base
 
     public function testInitializeLoadsVendoredChatparts(): void
     {
+        // tests/units/Base.php doesn't register ApiProvider; initialize() needs $this->api.
+        $this->container->register(new \Kanboard\ServiceProvider\ApiProvider());
         (new Plugin($this->container))->initialize();
         $this->assertTrue(class_exists(\ChatParts\Model\Message::class));
     }

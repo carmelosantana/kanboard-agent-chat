@@ -1,0 +1,23 @@
+{
+    "source": "save-it",
+    "items": [
+        {
+            "external_id": "ig-sample-0001",
+            "title": "Studio tour: how the autoplay hero video was shot",
+            "body": "## Transcript\n\n**Host:** Thanks for having us in the studio.\n\n**Creator:** We shot the autoplay hero video in one afternoon, with natural light from the north windows. The loop is eight seconds, muted, and it starts on the product, not on a face.\n\n**Host:** Why muted?\n\n**Creator:** Browsers only autoplay muted video, and people scroll past anything that waits for a click.",
+            "url": "https://www.instagram.com/p/SAMPLE0001/",
+            "author": "sample.creator",
+            "occurred_at": 1763337600,
+            "metadata": {"kind": "reel", "duration_s": 94, "likes": 1280}
+        },
+        {
+            "external_id": "ig-sample-0002",
+            "title": "Q&A: packaging and shipping",
+            "body": "## Transcript\n\n**Creator:** The new boxes are recyclable and ship flat. We switched suppliers in the spring, and returns dropped because the inserts hold the bottle in place.",
+            "url": "https://www.instagram.com/p/SAMPLE0002/",
+            "author": "sample.creator",
+            "occurred_at": 1763424000,
+            "metadata": {"kind": "post", "likes": 412}
+        }
+    ]
+}

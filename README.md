@@ -37,7 +37,40 @@ Deleting a project deletes its room, messages, runs, files rows and knowledge.
 
 Knowledge search uses each database's own full-text engine, so results can differ by dialect: SQLite
 FTS5 (`unicode61` tokens), MySQL/MariaDB InnoDB FULLTEXT (words under 3 characters and its stopwords
-are not indexed) and Postgres `simple` text search (no stemming).
+are not indexed) and Postgres `simple` text search (no stemming). Queries are reduced to their words
+(no search syntax reaches the engine); SQLite and MySQL match any of the words, ranked, while Postgres
+(`plainto_tsquery`) needs all of them.
+
+## Knowledge API
+
+Transcript agents (Save-it first) push documents into a project over Kanboard's JSON-RPC API
+(`jsonrpc.php`). A document is keyed by `(project_id, source, external_id)`, so pushing it again
+updates it in place.
+
+| Procedure | Params | Returns |
+|---|---|---|
+| `knowledgeUpsert` | `project_id`, `source` (≤ 64), `external_id` (≤ 191), `title` (≤ 255), `body` (≤ 200 000 characters, Markdown), `url` (http/https, optional), `author` (≤ 255, optional), `occurred_at` (unix time, optional), `metadata` (JSON object, ≤ 16 KB, optional) | `{"ok": true, "id": <id>}` |
+| `knowledgeDelete` | `project_id`, `source`, `external_id` | `true` if a document was deleted |
+
+Who may call them:
+
+- **A user** (username with password or personal API token): a manager of the project, or an app
+  admin. Anyone else, an inactive user, or a project that does not exist gets `403 Forbidden`. A
+  dedicated Kanboard user with the manager role on the archive project is the intended caller.
+- **The application token** (user `jsonrpc`): Kanboard gives it full API access, so it may write
+  into any existing project. Keep it for trusted automation.
+
+Invalid params come back as `-32602 Invalid params` with a plain reason in `data`.
+
+Each document has a read-only page at `/agentchat/knowledge/<id>`, open to anyone who can view its
+project; the bot links its citations there.
+
+To try it on a dev stack, push the sample transcripts as a project manager:
+
+```bash
+KANBOARD_URL=http://localhost:8081/jsonrpc.php KANBOARD_USER=<manager> KANBOARD_TOKEN=<token> \
+  php scripts/import-saveit-fixture.php <project_id> [Test/fixtures/saveit-sample.json]
+```
 
 ## chatparts
 
