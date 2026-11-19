@@ -10,6 +10,7 @@ use Kanboard\Plugin\AgentChat\Bot\ContextBudget;
 use Kanboard\Plugin\AgentChat\Helper\KanboardHost;
 use Kanboard\Plugin\AgentChat\Model\AccessPolicy;
 use Kanboard\Plugin\AgentChat\Model\Busy;
+use Kanboard\Plugin\AgentChat\Model\FileModel;
 use Kanboard\Plugin\AgentChat\Model\MessageModel;
 use Kanboard\Plugin\AgentChat\Model\NothingToShare;
 use Kanboard\Plugin\AgentChat\Model\ProjectSettings;
@@ -25,7 +26,8 @@ use Kanboard\Plugin\AgentChat\Model\ShareModel;
  *
  *  - show:  the thread in the kit's Drawer (htmx), or on the task page without JS
  *  - send:  stores the question and always starts a run (no @bot needed) for someone who may
- *           ask the bot here now (AccessPolicy::canAskBot; a 403 Notice otherwise); its history is the
+ *           ask the bot here now (AccessPolicy::canAskBot; a 403 Notice otherwise; images only
+ *           from someone who may post, else a 403 Notice and nothing stored); its history is the
  *           private thread only (BotRunner). Limits as in the room: 429, or 413 for a
  *           question too long for the model (the task counts), and no run starts
  *  - share: POST, copies the latest question and answer into the room (ShareModel); 409 when
@@ -52,6 +54,8 @@ class DrawerController extends BaseController
             'task' => $task,
             'messages' => array_map([$messages, 'toChatPartsMessage'], $messages->privateThread((int) $room['id'], $userId, (int) $task['id'], self::PAGE_SIZE)),
             'canAsk' => (new AccessPolicy($this->container))->canAskBot($userId, $projectId),
+            // A viewer asking under "everyone": no images and no Share (both put things in the room).
+            'canPost' => (new AccessPolicy($this->container))->canPost($userId, $projectId),
             'botImages' => (new ProjectSettings($this->container, $projectId))->botImages(),
         ];
 
@@ -76,6 +80,11 @@ class DrawerController extends BaseController
             return;
         }
         $this->checkCSRFForm();
+        // Images are for people who can post: a viewer asking under "everyone" sends text only.
+        if (FileModel::uploads($this->request->getFileInfo('images')) !== [] && ! (new AccessPolicy($this->container))->canPost($userId, $projectId)) {
+            $this->notice(t('Only people who can post in the room can attach images.'), 403);
+            return;
+        }
         $runs = new RunModel($this->container);
         $runs->reap();
 

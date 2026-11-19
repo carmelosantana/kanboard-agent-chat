@@ -271,6 +271,70 @@ class DrawerControllerTest extends Base
         $this->assertSame([], $this->messages());
     }
 
+    // Spec decision 7 / ruling 61: with ask role "everyone" a viewer asks in the drawer (private
+    // thread), never in the room, and attaches no images.
+    public function testViewerAsksInTheDrawerWhenTheProjectAllowsEveryone(): void
+    {
+        (new ProjectSettings($this->container, $this->project))->setAskRole('everyone');
+        $this->loginAs($this->viewer);
+        $this->assertStringContainsString('Ask the bot', $this->sidebar(), 'the button shows for the viewer');
+
+        $shown = $this->call('show', $this->task);
+        $this->assertStringContainsString('cp-message', $shown['body'], 'a composer');
+        $this->assertStringNotContainsString('id="cp-images"', $shown['body'], 'no attach control');
+        $this->assertStringNotContainsString('agentchat-share', $shown['body'], 'no Share to room');
+
+        $out = $this->ask($this->task, 'what is left on this task?', htmx: true);
+        $this->assertSame(200, $out['status']);
+        $rows = $this->messages();
+        $this->assertCount(2, $rows, 'the question and the bot draft');
+        $this->assertSame('private', $rows[0]['visibility']);
+        $this->assertSame($this->viewer, (int) $rows[0]['private_to']);
+        $this->assertSame($this->viewer, (int) $rows[0]['sender_id']);
+        $this->assertSame(1, $this->container['db']->table(RunModel::TABLE)->count());
+    }
+
+    public function testViewerCannotPostToTheRoomEvenWhenTheProjectAllowsEveryone(): void
+    {
+        (new ProjectSettings($this->container, $this->project))->setAskRole('everyone');
+        $this->loginAs($this->viewer);
+        $this->container['request'] = new Request($this->container, ['REQUEST_METHOD' => 'POST', 'HTTP_HX_REQUEST' => 'true'], ['project_id' => $this->project], ['csrf_token' => $this->container['token']->getCSRFToken(), 'message' => '@bot hello?'], [], []);
+        try {
+            (new \Kanboard\Plugin\AgentChat\Controller\RoomController($this->container))->send();
+            $this->fail('a viewer posted to the room');
+        } catch (AccessForbiddenException $e) {
+        }
+        $this->assertSame([], $this->messages());
+        $this->assertSame(0, $this->container['db']->table(RunModel::TABLE)->count());
+    }
+
+    public function testViewerDrawerUploadIsRefusedAndNothingStored(): void
+    {
+        (new ProjectSettings($this->container, $this->project))->setAskRole('everyone');
+        $this->loginAs($this->viewer);
+
+        $out = $this->ask($this->task, 'what is in this?', [$this->img->upload(ImageFixtures::png())], htmx: true);
+
+        $this->assertSame(403, $out['status']);
+        $this->assertStringContainsString('cp-notice', $out['body']);
+        $this->assertStringContainsString('Only people who can post in the room can attach images.', $out['body']);
+        $this->assertSame([], $this->messages());
+        $this->assertSame([], $this->files());
+        $this->assertSame([], $this->blobs());
+        $this->assertSame(0, $this->container['db']->table(RunModel::TABLE)->count());
+    }
+
+    public function testViewerUnderTheDefaultAskRoleGetsTheNotice(): void
+    {
+        $this->loginAs($this->viewer);
+
+        $out = $this->ask($this->task, 'anyone there?', htmx: true);
+
+        $this->assertSame(403, $out['status']);
+        $this->assertStringContainsString('The bot is not available here.', $out['body']);
+        $this->assertSame([], $this->messages());
+    }
+
     public function testDrawerRunScopesToTaskFirst(): void
     {
         $provider = new FakeProvider([[FakeProvider::text('It is blocked on review.')]]);
