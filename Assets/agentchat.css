@@ -1,0 +1,20 @@
+/* The chat page: thread and composer beside the People/Agents/Bots rail. Loaded on the chat page only. */
+.agentchat-room {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 240px;
+  height: calc(100vh - 140px);
+  min-height: 360px;
+}
+.agentchat-room__main {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-height: 0;
+  padding: 0 12px 12px 0;
+}
+.agentchat-room__main .cp-thread { flex: 1 1 auto; }
+@media (max-width: 768px) {
+  .agentchat-room { grid-template-columns: 1fr; height: auto; }
+  .agentchat-room__main { height: 70vh; padding-right: 0; }
+  .agentchat-room .cp-rail { border-left: 0; }
+}

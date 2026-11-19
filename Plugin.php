@@ -2,6 +2,8 @@
 namespace Kanboard\Plugin\AgentChat;
 
 use Kanboard\Core\Plugin\Base;
+use Kanboard\Core\Security\Role;
+use Kanboard\Plugin\AgentChat\Model\AccessPolicy;
 
 class Plugin extends Base
 {
@@ -9,6 +11,21 @@ class Plugin extends Base
     {
         // chatparts UI kit, vendored as a hash-checked copy (scripts/sync-chatparts.sh).
         require_once __DIR__.'/vendor-chatparts/autoload.php';
+
+        $this->route->addRoute('project/:project_id/chat', 'RoomController', 'show', 'AgentChat');
+        $this->route->addRoute('agentchat/:project_id/poll', 'RoomController', 'poll', 'AgentChat');
+        $this->route->addRoute('agentchat/:project_id/send', 'RoomController', 'send', 'AgentChat');
+        // Core's middleware asks for a project role first; RoomController applies AccessPolicy on top.
+        $this->projectAccessMap->add('RoomController', '*', Role::PROJECT_VIEWER);
+
+        $this->hook->on('template:project-header:view-switcher', [
+            'template' => 'AgentChat:project_header/tab',
+            'callable' => fn (array $project) => [
+                'agentchat_can_view' => (new AccessPolicy($this->container))->canView((int) $this->userSession->getId(), (int) $project['id']),
+            ],
+        ]);
+        // The kit's CSS, JS and htmx-config meta are registered by RoomController::show(), so
+        // they load on the chat page only.
     }
 
     public function getPluginName(): string        { return 'AgentChat'; }

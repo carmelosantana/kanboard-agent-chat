@@ -137,7 +137,7 @@ class MessageModel extends Base
      * Private messages never appear here, not even to their owner: they are read only through
      * privateThread(). $viewerId is the poller; access is checked by the caller (AccessPolicy).
      *
-     * The poll endpoint (a later task) additionally filters out non-final bot drafts
+     * The poll endpoint (RoomController) additionally filters out non-final bot drafts
      * (status submitted/streaming), which reach the asker through the stream instead.
      */
     public function listAfter(int $roomId, int $viewerId, int $afterId, int $limit = 50): array
@@ -149,6 +149,18 @@ class MessageModel extends Base
             ->asc('id')
             ->limit(max(1, min($limit, 200)))
             ->findAll();
+    }
+
+    /** The newest $limit room messages (visibility=room), oldest first: what the room page opens with. */
+    public function latest(int $roomId, int $limit = 50): array
+    {
+        $rows = $this->db->table(self::TABLE)
+            ->eq('room_id', $roomId)
+            ->eq('visibility', 'room')
+            ->desc('id')
+            ->limit(max(1, min($limit, 200)))
+            ->findAll();
+        return array_reverse($rows);
     }
 
     /** The newest $limit messages of $userId's private drawer thread on $taskId, oldest first. */

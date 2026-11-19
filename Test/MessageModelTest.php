@@ -211,6 +211,18 @@ class MessageModelTest extends Base
         $this->assertSame([], $this->messages->listAfter($this->roomId + 1, 2, 0));
     }
 
+    public function testLatestKeepsTheNewestRoomMessagesOldestFirst(): void
+    {
+        $a = $this->messages->create($this->roomId, $this->human(2), $this->text('a'));
+        $this->messages->create($this->roomId, $this->human(2), $this->text('secret'), ['visibility' => 'private', 'private_to' => 2, 'task_id' => 5]);
+        $b = $this->messages->create($this->roomId, $this->bot(), $this->text('b'));
+        $c = $this->messages->create($this->roomId, $this->human(3), $this->text('c'));
+
+        $this->assertSame([$a, $b, $c], array_map('intval', array_column($this->messages->latest($this->roomId), 'id')));
+        $this->assertSame([$b, $c], array_map('intval', array_column($this->messages->latest($this->roomId, 2), 'id')));
+        $this->assertSame([], $this->messages->latest($this->roomId + 1));
+    }
+
     public function testPrivateThreadOnlyForOwner(): void
     {
         $q = $this->messages->create($this->roomId, $this->human(2), $this->text('q'), ['visibility' => 'private', 'private_to' => 2, 'task_id' => 5]);
