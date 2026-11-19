@@ -55,6 +55,62 @@ class MessageModelTest extends Base
         $this->assertNull(MessageModel::validateBody(' '.str_repeat('a', 8000)."\n"));
     }
 
+    public function testBodyMustBeCleanUtf8WithoutNul(): void
+    {
+        $this->assertNotNull(MessageModel::validateBody("\xff"));
+        $this->assertNotNull(MessageModel::validateBody("hi \xc3"));
+        $this->assertNotNull(MessageModel::validateBody("a\0b"));
+    }
+
+    public function testBodyOfOnlyUnicodeWhitespaceIsEmpty(): void
+    {
+        foreach (["\u{00A0}", "\u{3000}", "\u{200B}", "\u{FEFF}", " \u{2003}\n\u{00A0} "] as $blank) {
+            $this->assertNotNull(MessageModel::validateBody($blank), json_encode($blank));
+        }
+        // Unicode padding does not count toward the limit either.
+        $this->assertNull(MessageModel::validateBody("\u{3000}".str_repeat('a', 8000)."\u{00A0}"));
+        $this->assertNull(MessageModel::validateBody("\u{00A0}a\u{00A0}"));
+    }
+
+    public function testBadBytesAreInvalidArgumentsNeverJsonOrSqlErrors(): void
+    {
+        $cases = [
+            'human invalid utf-8' => fn () => $this->messages->create($this->roomId, $this->human(2), $this->text("\xff")),
+            'human NUL' => fn () => $this->messages->create($this->roomId, $this->human(2), $this->text("a\0b")),
+            'bot invalid utf-8 part' => fn () => $this->messages->create($this->roomId, $this->bot(), $this->text("\xff")),
+            'invalid utf-8 metadata' => fn () => $this->messages->create($this->roomId, $this->bot(), $this->text('ok'), ['metadata' => ['k' => "\xff"]]),
+            'update invalid utf-8 metadata' => fn () => $this->messages->update(
+                $this->messages->create($this->roomId, $this->bot(), []), ['metadata' => ['k' => "\xff"]]
+            ),
+        ];
+        foreach ($cases as $name => $call) {
+            try {
+                $call();
+                $this->fail("$name accepted");
+            } catch (InvalidArgumentException $e) {
+                $this->assertNotSame('', $e->getMessage(), $name);
+            }
+        }
+    }
+
+    public function testBotTextNulNeverReachesBodyText(): void
+    {
+        $id = $this->messages->create($this->roomId, $this->bot(), $this->text("a\0b"));
+        $this->assertSame('ab', $this->messages->getById($id)['body_text']);
+        $this->messages->update($id, ['parts' => $this->text("c\0d")]);
+        $this->assertSame('cd', $this->messages->getById($id)['body_text']);
+    }
+
+    public function testHumanPrivateMessageMustBeAddressedToItsSender(): void
+    {
+        $this->assertGreaterThan(0, $this->messages->create($this->roomId, $this->human(2), $this->text('q'), ['visibility' => 'private', 'private_to' => 2, 'task_id' => 5]));
+        // The bot answers into the asker's thread.
+        $this->assertGreaterThan(0, $this->messages->create($this->roomId, $this->bot(), $this->text('a'), ['visibility' => 'private', 'private_to' => 2, 'task_id' => 5]));
+
+        $this->expectException(InvalidArgumentException::class);
+        $this->messages->create($this->roomId, $this->human(2), $this->text('q'), ['visibility' => 'private', 'private_to' => 3, 'task_id' => 5]);
+    }
+
     public function testCreateRejectsAnInvalidHumanBody(): void
     {
         $this->expectException(InvalidArgumentException::class);
@@ -230,5 +286,11 @@ class MessageModelTest extends Base
         // An unknown stored status or bad metadata is unreadable too, never a fatal.
         $this->container['db']->table('agentchat_messages')->eq('id', $id)->update(['parts' => '[]', 'status' => 'weird']);
         $this->assertSame(MessageStatus::Error, $this->messages->toChatPartsMessage($this->messages->getById($id))->status);
+        foreach (['"x"', '{bad'] as $metadata) {
+            $this->container['db']->table('agentchat_messages')->eq('id', $id)->update(['status' => 'done', 'metadata' => $metadata]);
+            $msg = $this->messages->toChatPartsMessage($this->messages->getById($id));
+            $this->assertSame(MessageStatus::Error, $msg->status, $metadata);
+            $this->assertTrue($msg->metadata['unreadable'], $metadata);
+        }
     }
 }

@@ -31,10 +31,19 @@ class MessageModel extends Base
     /** @var array<int, string> user id => display name, per instance */
     private array $names = [];
 
-    /** Error text for a body outside 1..8000 characters (after trimming), or null when it is fine. */
+    /** Whitespace trimmed before counting: ASCII and Unicode spaces, zero-width space, BOM. */
+    private const EDGE_SPACE = '/^[\p{Z}\s\x{200B}\x{FEFF}]+|[\p{Z}\s\x{200B}\x{FEFF}]+$/u';
+
+    /**
+     * Error text for a body that is not valid UTF-8, holds a NUL byte, or is outside
+     * 1..8000 characters once Unicode whitespace is trimmed from both ends; null when it is fine.
+     */
     public static function validateBody(string $body): ?string
     {
-        $length = mb_strlen(trim($body), 'UTF-8');
+        if (! mb_check_encoding($body, 'UTF-8') || str_contains($body, "\0")) {
+            return t('This message contains characters that cannot be sent.');
+        }
+        $length = mb_strlen((string) preg_replace(self::EDGE_SPACE, '', $body), 'UTF-8');
         if ($length === 0) {
             return t('Write a message first.');
         }
@@ -59,11 +68,12 @@ class MessageModel extends Base
             throw new InvalidArgumentException('Unknown message option: '.implode(', ', $unknown).'.');
         }
         [$senderKind, $senderId] = $this->sender($p);
-        $partsJson = $this->encodeParts($parts);
-        $bodyText = $this->plainText($parts);
-        if (in_array($senderKind, ['human', 'agent'], true) && ($error = self::validateBody($bodyText)) !== null) {
+        $this->assertPartList($parts);
+        if (in_array($senderKind, ['human', 'agent'], true) && ($error = self::validateBody($this->joinText($parts))) !== null) {
             throw new InvalidArgumentException($error);
         }
+        $partsJson = $this->encodeParts($parts);
+        $bodyText = $this->plainText($parts);
 
         $clientMsgId = $opts['client_msg_id'] ?? null;
         if ($clientMsgId !== null && (! is_string($clientMsgId) || ! preg_match(self::CLIENT_MSG_ID, $clientMsgId))) {
@@ -76,6 +86,10 @@ class MessageModel extends Base
         $privateTo = isset($opts['private_to']) ? $this->positiveInt($opts['private_to'], 'private_to') : null;
         if (($visibility === 'private') !== ($privateTo !== null)) {
             throw new InvalidArgumentException('A private message needs private_to; a room message must not have it.');
+        }
+        // A person writes only into their own drawer thread; the bot answers into the asker's.
+        if ($privateTo !== null && $senderKind === 'human' && $privateTo !== $senderId) {
+            throw new InvalidArgumentException('A private message from a person must be addressed to that person.');
         }
         $taskId = isset($opts['task_id']) ? $this->positiveInt($opts['task_id'], 'task_id') : null;
         $status = $this->status($opts['status'] ?? MessageStatus::Done->value);
@@ -105,6 +119,8 @@ class MessageModel extends Base
             return (int) $id;
         }
         // Lost a race on agentchat_messages_client_msg_uidx: the other request's row stands.
+        // Bot and system rows have sender_id NULL, which that index never compares equal, so
+        // for them the lookup before the insert is the only dedupe (accepted: they are server-driven).
         if ($clientMsgId !== null && ($existing = $this->findByClientMsgId($roomId, $senderKind, $senderId, $clientMsgId)) !== null) {
             return $existing;
         }
@@ -249,6 +265,12 @@ class MessageModel extends Base
 
     private function encodeParts(mixed $parts): string
     {
+        $this->assertPartList($parts);
+        return $this->json(array_map(static fn (Part $part): array => $part->toArray(), $parts), 'parts');
+    }
+
+    private function assertPartList(mixed $parts): void
+    {
         if (! is_array($parts) || ! array_is_list($parts)) {
             throw new InvalidArgumentException('parts must be a list of chatparts parts.');
         }
@@ -257,11 +279,16 @@ class MessageModel extends Base
                 throw new InvalidArgumentException('parts must be a list of chatparts parts, got '.get_debug_type($part).'.');
             }
         }
-        return json_encode(array_map(static fn (Part $part): array => $part->toArray(), $parts), JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+    }
+
+    /** The derived body_text: joinText() without NUL bytes, which Postgres TEXT cannot hold. @param list<Part> $parts */
+    private function plainText(array $parts): string
+    {
+        return str_replace("\0", '', $this->joinText($parts));
     }
 
     /** Text parts joined by a blank line, as chatparts' Message::plainText(). @param list<Part> $parts */
-    private function plainText(array $parts): string
+    private function joinText(array $parts): string
     {
         $texts = [];
         foreach ($parts as $part) {
@@ -285,7 +312,17 @@ class MessageModel extends Base
         if (! is_array($metadata)) {
             throw new InvalidArgumentException('metadata must be an array.');
         }
-        return json_encode((object) $metadata, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+        return $this->json((object) $metadata, 'metadata');
+    }
+
+    /** JSON for storage; unencodable input (invalid UTF-8, too deep) is the caller's bad argument. */
+    private function json(mixed $value, string $what): string
+    {
+        try {
+            return json_encode($value, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+        } catch (\JsonException $e) {
+            throw new InvalidArgumentException("$what cannot be stored: {$e->getMessage()}.", 0, $e);
+        }
     }
 
     private function positiveInt(mixed $value, string $name): int
