@@ -4,7 +4,7 @@
 <?php if (! $botReady): ?>
     <p class="alert alert-info"><?= t('The project bot is unavailable: AiConnector is missing, too old, or has no AI provider ready. The chat works for people and agents.') ?></p>
 <?php endif ?>
-<form method="post" action="<?= $this->url->href('SettingsController', 'saveProject', ['project_id' => $project['id'], 'plugin' => 'AgentChat']) ?>" autocomplete="off">
+<form method="post" action="<?= $this->url->href('ChatSettingsController', 'saveProject', ['project_id' => $project['id'], 'plugin' => 'AgentChat']) ?>" autocomplete="off">
     <?= $this->form->csrf() ?>
 
     <fieldset>

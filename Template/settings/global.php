@@ -2,7 +2,7 @@
     <h2><?= t('Chat limits') ?></h2>
 </div>
 <p class="alert alert-info"><?= t('Each streaming answer holds one PHP worker. Keep the instance limit below your PHP-FPM pm.max_children.') ?></p>
-<form method="post" action="<?= $this->url->href('SettingsController', 'saveLimits', ['plugin' => 'AgentChat']) ?>" autocomplete="off">
+<form method="post" action="<?= $this->url->href('ChatSettingsController', 'saveLimits', ['plugin' => 'AgentChat']) ?>" autocomplete="off">
     <?= $this->form->csrf() ?>
 
     <fieldset>

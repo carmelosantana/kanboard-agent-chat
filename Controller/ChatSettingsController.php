@@ -25,7 +25,7 @@ use Kanboard\Plugin\AiConnector\Model\ProviderRegistry;
  * A refused save stores nothing and answers 400 with the form and its errors. Values are read
  * from storage on each request, so a change applies to the next one.
  */
-class SettingsController extends BaseController
+class ChatSettingsController extends BaseController
 {
     public function project(array $values = [], array $errors = [], int $status = 200): void
     {
@@ -82,7 +82,7 @@ class SettingsController extends BaseController
             $settings->setAiProfile($values['ai_profile']);
         }
         $this->flash->success(t('Settings saved successfully.'));
-        $this->response->redirect($this->helper->url->to('SettingsController', 'project', ['project_id' => $project['id'], 'plugin' => 'AgentChat']));
+        $this->response->redirect($this->helper->url->to('ChatSettingsController', 'project', ['project_id' => $project['id'], 'plugin' => 'AgentChat']));
     }
 
     public function limits(array $values = [], array $errors = [], int $status = 200): void
@@ -110,7 +110,7 @@ class SettingsController extends BaseController
             return;
         }
         $this->flash->success(t('Settings saved successfully.'));
-        $this->response->redirect($this->helper->url->to('SettingsController', 'limits', ['plugin' => 'AgentChat']));
+        $this->response->redirect($this->helper->url->to('ChatSettingsController', 'limits', ['plugin' => 'AgentChat']));
     }
 
     private function managedProject(): array

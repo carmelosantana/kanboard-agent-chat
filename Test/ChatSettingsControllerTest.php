@@ -6,14 +6,14 @@ use Kanboard\Core\Controller\AccessForbiddenException;
 use Kanboard\Core\Http\Request;
 use Kanboard\Core\Http\Response;
 use Kanboard\Core\Security\Role;
-use Kanboard\Plugin\AgentChat\Controller\SettingsController;
+use Kanboard\Plugin\AgentChat\Controller\ChatSettingsController;
 use Kanboard\Plugin\AgentChat\Model\AiGate;
 use Kanboard\Plugin\AgentChat\Model\LimitsSettings;
 use Kanboard\Plugin\AgentChat\Model\ProjectSettings;
 use Kanboard\Plugin\AgentChat\Plugin;
 
 /** Project settings (managers) and the global run limits (app admin). */
-class SettingsControllerTest extends Base
+class ChatSettingsControllerTest extends Base
 {
     private int $project;
     private int $manager;
@@ -76,7 +76,7 @@ class SettingsControllerTest extends Base
             $out['redirect'] = $url;
         });
         $this->container['response'] = $resp;
-        (new SettingsController($this->container))->$action();
+        (new ChatSettingsController($this->container))->$action();
         $this->container['memoryCache']->flush();
         return $out;
     }

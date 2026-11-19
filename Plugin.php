@@ -37,10 +37,10 @@ class Plugin extends Base
         $this->projectAccessMap->add('DrawerController', '*', Role::PROJECT_VIEWER);
         // Settings: project managers for their project, the app admin for the run limits; the
         // controller checks AccessPolicy::canManage and the app role again.
-        $this->route->addRoute('project/:project_id/chat/settings', 'SettingsController', 'project', 'AgentChat');
-        $this->route->addRoute('settings/chat', 'SettingsController', 'limits', 'AgentChat');
-        $this->projectAccessMap->add('SettingsController', ['project', 'saveProject'], Role::PROJECT_MANAGER);
-        $this->applicationAccessMap->add('SettingsController', ['limits', 'saveLimits'], Role::APP_ADMIN);
+        $this->route->addRoute('project/:project_id/chat/settings', 'ChatSettingsController', 'project', 'AgentChat');
+        $this->route->addRoute('settings/chat', 'ChatSettingsController', 'limits', 'AgentChat');
+        $this->projectAccessMap->add('ChatSettingsController', ['project', 'saveProject'], Role::PROJECT_MANAGER);
+        $this->applicationAccessMap->add('ChatSettingsController', ['limits', 'saveLimits'], Role::APP_ADMIN);
         $this->removeChatFilesWithProjects();
 
         // JSON-RPC: withObject so core wins any name clash (withCallback/withClassAndMethod would shadow core).
