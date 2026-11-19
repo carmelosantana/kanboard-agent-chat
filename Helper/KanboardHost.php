@@ -6,6 +6,7 @@ use ChatParts\Host\HostAdapter;
 use ChatParts\Model\Participant;
 use InvalidArgumentException;
 use Kanboard\Core\Base;
+use Kanboard\Core\Markdown;
 
 /**
  * chatparts' view of Kanboard: routes, CSRF, translation, markdown and asset URLs.
@@ -45,18 +46,29 @@ class KanboardHost extends Base implements HostAdapter
     }
 
     /**
-     * Kanboard's markdown (Parsedown, raw HTML escaped, `#12` linked to the task), then every
-     * <img> whose src is not same-origin is dropped: a relative URL, or an absolute one whose
-     * host and port are this request's or the configured application URL's.
+     * Kanboard's Markdown parser (Parsedown with Kanboard's `#12` task and `@user` links) in
+     * safe mode with raw HTML escaped, then two allow-lists over its output:
+     *  - links: http(s), mailto, a path from the site root, `?query` or `#fragment`; any other
+     *    href (javascript:, data:, ftp:, an entity-hidden scheme...) becomes its plain text;
+     *  - images: a path from the site root, or http(s) on this Kanboard's own host and port;
+     *    anything else is dropped.
+     * Any URL with a backslash, whitespace or control character fails both, since browsers
+     * read `\` as `/` (`/\evil.example` is another host).
      */
     public function markdown(string $text): string
     {
-        $html = $this->helper->text->markdown($text);
+        $parser = new Markdown($this->container, false);
+        $parser->setMarkupEscaped(true);
+        $parser->setBreaksEnabled(true);
+        $parser->setSafeMode(true);
+        $html = $parser->text($text);
 
-        return (string) preg_replace_callback('/<img\b[^>]*>/i', function (array $m): string {
-            return preg_match('/\ssrc="([^"]*)"/i', $m[0], $src) === 1 && $this->isSameOrigin(html_entity_decode($src[1], ENT_QUOTES | ENT_HTML5, 'UTF-8'))
-                ? $m[0]
-                : '';
+        $html = (string) preg_replace_callback('~<a\b([^>]*)>(.*?)</a>~s', function (array $m): string {
+            return $this->isSafeHref($this->attr($m[1], 'href')) ? $m[0] : $m[2];
+        }, $html);
+
+        return (string) preg_replace_callback('~<img\b([^>]*)>~i', function (array $m): string {
+            return $this->isSameOriginImage($this->attr($m[1], 'src')) ? $m[0] : '';
         }, $html);
     }
 
@@ -81,24 +93,39 @@ class KanboardHost extends Base implements HostAdapter
         return $this->helper->url->dir().self::ASSET_DIR.$file;
     }
 
-    private function isSameOrigin(string $url): bool
+    /** An attribute's value from Parsedown's output, entities decoded once (as the browser does); null when absent. */
+    private function attr(string $attrs, string $name): ?string
     {
-        $url = trim($url);
-        if ($url === '') {
+        return preg_match('~\s'.$name.'="([^"]*)"~i', $attrs, $m) === 1 ? html_entity_decode($m[1], ENT_QUOTES | ENT_HTML5, 'UTF-8') : null;
+    }
+
+    private function isSafeHref(?string $url): bool
+    {
+        return $url !== null && ! $this->hasUnsafeChars($url)
+            && preg_match('~^(https?://[^/?#@]|mailto:[^/]|/(?![/])|[?#])~i', $url) === 1;
+    }
+
+    private function isSameOriginImage(?string $url): bool
+    {
+        if ($url === null || $this->hasUnsafeChars($url)) {
             return false;
         }
-        $parts = parse_url($url);
-        if ($parts === false) {
+        if (preg_match('~^/(?!/)~', $url) === 1) {
+            return true;
+        }
+        // Absolute: the authority must be a bare host[:port] (no userinfo) on this Kanboard.
+        if (preg_match('~^(https?)://([a-z0-9.-]+)(?::(\d{1,5}))?(?:[/?#]|$)~i', $url, $m) !== 1) {
             return false;
         }
-        if (! isset($parts['scheme']) && ! isset($parts['host'])) {
-            return ! str_starts_with($url, '//') && ! str_starts_with($url, '\\');
-        }
-        if (! in_array(strtolower($parts['scheme'] ?? ''), ['http', 'https'], true) || ! isset($parts['host'])) {
-            return false;
-        }
+        $parts = ['scheme' => $m[1], 'host' => $m[2]] + (isset($m[3]) && $m[3] !== '' ? ['port' => (int) $m[3]] : []);
 
         return in_array($this->origin($parts), $this->ownOrigins(), true);
+    }
+
+    /** Backslashes, whitespace and control characters: browsers strip or reinterpret them. */
+    private function hasUnsafeChars(string $url): bool
+    {
+        return $url === '' || preg_match('~[\\\\\x00-\x20\x7F]~', $url) === 1;
     }
 
     /** @return list<string> host:port pairs this Kanboard answers on */

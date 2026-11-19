@@ -43,6 +43,12 @@ class RoomModel extends Base
         return $room;
     }
 
+    /** The project's room if it exists; never creates it (for read-only endpoints). */
+    public function findForProject(int $projectId): ?array
+    {
+        return $this->findProjectRoom($projectId);
+    }
+
     public function get(int $roomId): ?array
     {
         return $this->db->table(self::TABLE)->eq('id', $roomId)->findOne() ?: null;

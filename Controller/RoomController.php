@@ -65,7 +65,13 @@ class RoomController extends BaseController
         if (! (new AccessPolicy($this->container))->canView($userId, $projectId)) {
             throw new AccessForbiddenException();
         }
-        $room = $this->projectRoom($projectId, $this->request->getStringParam('room'));
+        // Read-only: a room nobody has opened yet has no messages.
+        $room = (new RoomModel($this->container))->findForProject($projectId);
+        $this->assertRoomParam($room);
+        if ($room === null) {
+            $this->response->status(204);
+            return;
+        }
 
         $messages = new MessageModel($this->container);
         // Bot drafts (submitted, streaming) are included: other viewers see the bot answering, and
@@ -98,7 +104,8 @@ class RoomController extends BaseController
             return;
         }
 
-        $room = $this->projectRoom($projectId, (string) ($this->request->getRawValue('room') ?? $this->request->getStringParam('room')));
+        $room = (new RoomModel($this->container))->forProject($projectId);
+        $this->assertRoomParam($room);
         $clientMsgId = $this->request->getRawValue('client_msg_id');
         $messages = new MessageModel($this->container);
         try {
@@ -109,7 +116,9 @@ class RoomController extends BaseController
                 $clientMsgId === null || $clientMsgId === '' ? [] : ['client_msg_id' => $clientMsgId],
             );
         } catch (InvalidArgumentException $e) {
-            $this->notice($e->getMessage());
+            // Body problems already have a translated message; anything else (a malformed
+            // client_msg_id) gets a fixed one rather than the model's developer text.
+            $this->notice(MessageModel::validateBody($body) ?? t('This message could not be sent.'));
             return;
         }
 
@@ -121,14 +130,19 @@ class RoomController extends BaseController
         $this->response->html($this->bubbles($messages, [$messages->getById($id)]));
     }
 
-    /** The project's room; a client-sent room id that names another room is refused. */
-    private function projectRoom(int $projectId, string $roomParam): array
+    /**
+     * A client never picks the room, but one that sends a `room` param (POST or query) must
+     * name the project's room; any other value, an array included, is refused.
+     */
+    private function assertRoomParam(?array $room): void
     {
-        $room = (new RoomModel($this->container))->forProject($projectId);
-        if ($roomParam !== '' && $roomParam !== (string) $room['id']) {
+        $param = $this->request->getRawValue('room') ?? $this->request->getStringParam('room');
+        if ($param === '' || $param === null) {
+            return;
+        }
+        if (! is_string($param) || $room === null || $param !== (string) $room['id']) {
             throw new AccessForbiddenException();
         }
-        return $room;
     }
 
     private function bubbles(MessageModel $messages, array $rows): string

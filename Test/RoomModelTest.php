@@ -30,6 +30,16 @@ class RoomModelTest extends Base
         $this->assertSame($room, $rooms->get((int) $room['id']));
     }
 
+    public function testFindForProjectNeverCreates(): void
+    {
+        $rooms = new RoomModel($this->container);
+        $this->assertNull($rooms->findForProject($this->projectId));
+        $this->assertSame(0, $this->container['db']->table('agentchat_rooms')->count());
+
+        $room = $rooms->forProject($this->projectId);
+        $this->assertSame($room, $rooms->findForProject($this->projectId));
+    }
+
     public function testGetReturnsNullForAnUnknownRoom(): void
     {
         $this->assertNull((new RoomModel($this->container))->get(999));

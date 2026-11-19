@@ -23,15 +23,38 @@ class KanboardHostTest extends Base
     {
         $html = $this->host->markdown(
             "![ext](https://evil.example/a.png) ![rel](/files/b.png) ![proto](//evil.example/c.png)\n\n"
-            ."![same](http://kb.example/d.png) ![relative](img/e.png) ![otherport](http://kb.example:9000/f.png)"
+            ."![same](http://kb.example/d.png) ![relative](img/e.png) ![otherport](http://kb.example:9000/f.png)\n\n"
+            .'![bs1](/\evil.example/g.png) ![bs2](http://evil.example\@kb.example/h.png) ![at](http://evil.example@kb.example/i.png)'."\n\n"
+            .'![data](data:image/png;base64,iVBORw0KGgo=) ![js](javascript:alert(1)) ![tab](/files/%09x.png)'
         );
 
         $this->assertStringNotContainsString('evil.example', $html);
         $this->assertStringNotContainsString(':9000', $html, 'same host on another port is another origin');
+        $this->assertStringNotContainsString('data:', $html);
+        $this->assertStringNotContainsString('javascript', strtolower($html));
+        $this->assertStringNotContainsString('e.png', $html, 'only paths from the site root, not page-relative ones');
         $this->assertStringContainsString('<img src="/files/b.png"', $html);
         $this->assertStringContainsString('<img src="http://kb.example/d.png"', $html);
-        $this->assertStringContainsString('<img src="img/e.png"', $html);
+        $this->assertStringContainsString('<img src="/files/%09x.png"', $html, 'a percent-encoded tab is just a path');
         $this->assertSame(3, substr_count($html, '<img'));
+    }
+
+    public function testMarkdownDropsUnsafeLinksToPlainText(): void
+    {
+        $html = $this->host->markdown(
+            '[a](javascript:alert(1)) [b](JaVaScRiPt:alert(2)) [c](javascript&#58;alert(3)) [d](data:text/html;base64,PHNjcmlwdD4=) '
+            .'[e](vbscript:x) [f](ftp://files.example/x) [g](/\evil.example/) [ok1](https://example.org/x) [ok2](mailto:ada@example.org) [ok3](/task/3) [ok4](?q=1)'
+        );
+
+        foreach (['a', 'b', 'c', 'd', 'e', 'f', 'g'] as $text) {
+            $this->assertStringNotContainsString('>'.$text.'</a>', $html, "link $text must become plain text");
+            $this->assertStringContainsString(' '.$text.' ', ' '.strip_tags($html).' ', "the text of link $text stays");
+        }
+        $this->assertDoesNotMatchRegularExpression('~href="\s*(javascript|vbscript|data)~i', html_entity_decode(html_entity_decode($html)));
+        $this->assertStringContainsString('<a href="https://example.org/x">ok1</a>', $html);
+        $this->assertStringContainsString('<a href="mailto:ada@example.org">ok2</a>', $html);
+        $this->assertStringContainsString('<a href="/task/3">ok3</a>', $html);
+        $this->assertStringContainsString('<a href="?q=1">ok4</a>', $html);
     }
 
     public function testMarkdownKeepsImagesFromTheRequestHost(): void
@@ -55,7 +78,8 @@ class KanboardHostTest extends Base
     {
         $html = $this->host->markdown('See #12 please');
 
-        $this->assertMatchesRegularExpression('~<a href="[^"]*(task_id=12|task/12)[^"]*">#12</a>~', $html);
+        // No routes in unit tests, so Kanboard builds the query-string form.
+        $this->assertStringContainsString('<a href="?controller=TaskViewController&amp;action=show&amp;task_id=12">#12</a>', $html);
     }
 
     public function testTranslatedArgumentIsEscapedOnceInAComponent(): void
@@ -76,10 +100,10 @@ class KanboardHostTest extends Base
 
     public function testUrlBuildsPluginRoutes(): void
     {
-        // Without registered routes Kanboard falls back to ?controller=…&action=…; with them, the pretty path.
-        $this->assertMatchesRegularExpression('~controller=RoomController&action=poll&project_id=3&plugin=AgentChat|agentchat/3/poll~', $this->host->url('poll', ['project_id' => 3]));
-        $this->assertMatchesRegularExpression('~action=send|agentchat/3/send~', $this->host->url('send', ['project_id' => 3]));
-        $this->assertMatchesRegularExpression('~action=show|project/3/chat~', $this->host->url('chat', ['project_id' => 3]));
+        // No routes registered in unit tests: Kanboard's query-string form names controller, action and plugin.
+        $this->assertSame('?controller=RoomController&action=poll&project_id=3&plugin=AgentChat', $this->host->url('poll', ['project_id' => 3]));
+        $this->assertSame('?controller=RoomController&action=send&project_id=3&plugin=AgentChat', $this->host->url('send', ['project_id' => 3]));
+        $this->assertSame('?controller=RoomController&action=show&project_id=3&plugin=AgentChat', $this->host->url('chat', ['project_id' => 3]));
 
         $this->expectException(InvalidArgumentException::class);
         $this->host->url('nope');

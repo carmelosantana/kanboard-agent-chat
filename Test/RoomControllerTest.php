@@ -11,6 +11,7 @@ use Kanboard\Core\Http\Response;
 use Kanboard\Core\Security\Role;
 use Kanboard\Plugin\AgentChat\Controller\RoomController;
 use Kanboard\Plugin\AgentChat\Model\MessageModel;
+use Kanboard\Plugin\AgentChat\Model\ParticipantResolver;
 use Kanboard\Plugin\AgentChat\Model\RoomModel;
 use Kanboard\Plugin\AgentChat\Plugin;
 
@@ -90,6 +91,11 @@ class RoomControllerTest extends Base
         return (new MessageModel($this->container))->create($roomId, new Participant('human', (string) $userId, 'x'), [new TextPart('t', $text)], $opts);
     }
 
+    private function bot(): Participant
+    {
+        return (new ParticipantResolver($this->container))->bot();
+    }
+
     private function rows(): array
     {
         return $this->container['db']->table(MessageModel::TABLE)->asc('id')->findAll();
@@ -116,6 +122,40 @@ class RoomControllerTest extends Base
         $this->call('poll', ['project_id' => $this->projectA, 'room' => (string) $roomB, 'after' => 0]);
     }
 
+    public function testPollDoesNotCreateTheRoom(): void
+    {
+        $this->loginAs($this->viewer);
+
+        $this->assertSame(204, $this->call('poll', ['project_id' => $this->projectA, 'after' => 0])['status']);
+        $this->assertSame(0, $this->container['db']->table(RoomModel::TABLE)->count(), 'a read endpoint writes nothing');
+    }
+
+    public function testArrayRoomParamIsRefusedNotAnError(): void
+    {
+        $this->room($this->projectA);
+        $this->loginAs($this->member);
+        foreach (['poll' => [[], ['after' => 0]], 'send' => [['csrf_token' => $this->csrf(), 'message' => 'hi', 'room' => ['1']], []]] as $action => [$post, $get]) {
+            $get += ['project_id' => $this->projectA] + ($post === [] ? ['room' => ['1']] : []);
+            try {
+                $this->call($action, $get, $post);
+                $this->fail("$action must refuse an array room param");
+            } catch (AccessForbiddenException $e) {
+            }
+        }
+        $this->assertSame([], $this->rows());
+    }
+
+    public function testRailEscapesHostileNames(): void
+    {
+        $this->container['userModel']->update(['id' => $this->member, 'name' => '<img src=x onerror=alert(1)>&']);
+        $this->loginAs($this->viewer);
+
+        $html = $this->call('show', ['project_id' => $this->projectA])['body'];
+
+        $this->assertStringNotContainsString('<img src=x', $html);
+        $this->assertStringContainsString('&lt;img src=x onerror=alert(1)&gt;&amp;', $html);
+    }
+
     public function testPollReturns204WhenNothingNew(): void
     {
         $id = $this->post($this->room($this->projectA), $this->member, 'hello');
@@ -130,9 +170,9 @@ class RoomControllerTest extends Base
         $first = $this->post($room, $this->member, 'first');
         $second = $this->post($room, $this->member, 'second <b>bold</b>');
         $messages = new MessageModel($this->container);
-        $draft = $messages->create($room, new Participant('bot', null, 'project-bot'), [], ['status' => MessageStatus::Streaming->value]);
-        $submitted = $messages->create($room, new Participant('bot', null, 'project-bot'), [], ['status' => MessageStatus::Submitted->value]);
-        $answered = $messages->create($room, new Participant('bot', null, 'project-bot'), [new TextPart('a', 'an answer')]);
+        $draft = $messages->create($room, $this->bot(), [], ['status' => MessageStatus::Streaming->value]);
+        $submitted = $messages->create($room, $this->bot(), [], ['status' => MessageStatus::Submitted->value]);
+        $answered = $messages->create($room, $this->bot(), [new TextPart('a', 'an answer')]);
         $this->post($room, $this->member, 'private', ['visibility' => 'private', 'private_to' => $this->member]);
         $this->loginAs($this->viewer);
 
@@ -156,7 +196,7 @@ class RoomControllerTest extends Base
     {
         $room = $this->room($this->projectA);
         $id = $this->post($room, $this->member, 'q');
-        $draft = (new MessageModel($this->container))->create($room, new Participant('bot', null, 'project-bot'), [], ['status' => MessageStatus::Streaming->value]);
+        $draft = (new MessageModel($this->container))->create($room, $this->bot(), [], ['status' => MessageStatus::Streaming->value]);
         $this->loginAs($this->viewer);
 
         $out = $this->call('poll', ['project_id' => $this->projectA, 'after' => $id]);
@@ -290,6 +330,8 @@ class RoomControllerTest extends Base
         $this->assertSame(400, $badId['status']);
         $this->assertStringContainsString('cp-notice--error', $badId['body']);
         $this->assertStringNotContainsString('<x>', $badId['body']);
+        $this->assertStringContainsString('This message could not be sent.', $badId['body'], 'a translated fixed text, not the model\'s developer message');
+        $this->assertStringNotContainsString('client_msg_id', $badId['body']);
 
         $missing = $this->call('send', ['project_id' => $this->projectA], ['csrf_token' => $this->csrf()]);
         $this->assertSame(400, $missing['status']);
