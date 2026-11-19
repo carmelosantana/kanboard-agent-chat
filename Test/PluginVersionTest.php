@@ -1,0 +1,43 @@
+<?php
+require_once 'tests/units/Base.php';
+
+use KanboardTests\units\Base;
+use Kanboard\Plugin\AgentChat\Plugin;
+
+// Tag == plugin.json == getPluginVersion(): drift across the three is the most common release defect.
+class PluginVersionTest extends Base
+{
+    public function testVersionsAgree(): void
+    {
+        $json = json_decode(file_get_contents(__DIR__.'/../plugin.json'), true);
+        $this->assertSame('0.1.0', $json['version']);
+        $this->assertSame($json['version'], (new Plugin($this->container))->getPluginVersion());
+        $this->assertSame('AgentChat', $json['name']);
+        $this->assertSame('AgentChat', (new Plugin($this->container))->getPluginName());
+    }
+
+    // ModMenu reads {plugin, min_version, reason} with a BARE version; any other shape is silently dropped.
+    public function testRecommendsUsesModMenuDependencyShape(): void
+    {
+        $json = json_decode(file_get_contents(__DIR__.'/../plugin.json'), true);
+        $this->assertSame([], $json['requires']);
+        $this->assertSame([
+            ['plugin' => 'AiConnector', 'min_version' => '1.2.0', 'reason' => 'Project bot answers'],
+            ['plugin' => 'Agents', 'min_version' => '0.5.0', 'reason' => 'Agent badges'],
+            ['plugin' => 'Presence', 'min_version' => '1.0.1', 'reason' => 'Online dots'],
+        ], $json['recommends']);
+    }
+
+    // The gate's minimum and the declared recommendation are one number.
+    public function testGateMinimumMatchesRecommendedAiConnector(): void
+    {
+        $json = json_decode(file_get_contents(__DIR__.'/../plugin.json'), true);
+        $this->assertSame($json['recommends'][0]['min_version'], \Kanboard\Plugin\AgentChat\Model\AiGate::MIN_CONNECTOR_VERSION);
+    }
+
+    public function testInitializeLoadsVendoredChatparts(): void
+    {
+        (new Plugin($this->container))->initialize();
+        $this->assertTrue(class_exists(\ChatParts\Model\Message::class));
+    }
+}
