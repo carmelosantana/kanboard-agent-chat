@@ -46,9 +46,9 @@ AgentChat recommends, but does not require:
 |---|---|---|
 | [AiConnector](https://github.com/carmelosantana/kanboard-ai-connector) | `1.2.0` | the project bot (AiConnector 1.2.0 bundles php-agents 0.17) |
 | [Agents](https://github.com/carmelosantana/kanboard-agents) | `0.5.0` | Agent badges on agents' messages and an Agents group in the rail |
-| [Presence](https://github.com/carmelosantana/kanboard-presence) | `1.0.1` | online dots in the rail (declared; 0.1.0 does not draw them yet) |
 
-Without Agents everyone is a person. Without AiConnector, see
+Online dots from [Presence](https://github.com/carmelosantana/kanboard-presence) are not drawn in
+0.1.0, so it is not recommended yet. Without Agents everyone is a person. Without AiConnector, see
 [Without AiConnector](#without-aiconnector).
 
 After install, if Kanboard sits behind a proxy, read [Streaming behind a proxy](#streaming-behind-a-proxy)

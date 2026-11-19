@@ -32,7 +32,6 @@ class PluginVersionTest extends Base
         $this->assertSame([
             ['plugin' => 'AiConnector', 'min_version' => '1.2.0', 'reason' => 'Project bot answers'],
             ['plugin' => 'Agents', 'min_version' => '0.5.0', 'reason' => 'Agent badges'],
-            ['plugin' => 'Presence', 'min_version' => '1.0.1', 'reason' => 'Online dots'],
         ], $json['recommends']);
     }
 
