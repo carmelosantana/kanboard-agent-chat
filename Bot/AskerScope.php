@@ -39,18 +39,15 @@ class AskerScope extends Base
     }
 
     /**
-     * Comment visibilities the asker may read, as Kanboard's comment view applies them:
-     * admins read all, app managers all but admin-only, everyone else standard comments.
+     * Comment visibilities the bot reads: standard comments only, whatever the asker's app role.
+     * Answers are stored in the room or can be shared there, where Kanboard would never show
+     * manager-only or admin-only comments to the other readers, so admins gain nothing here.
      *
      * @return list<string>
      */
     public function commentVisibilities(): array
     {
-        return match ((string) ($this->userModel->getById($this->userId)['role'] ?? '')) {
-            Role::APP_ADMIN => [Role::APP_USER, Role::APP_MANAGER, Role::APP_ADMIN],
-            Role::APP_MANAGER => [Role::APP_USER, Role::APP_MANAGER],
-            default => [Role::APP_USER],
-        };
+        return [Role::APP_USER];
     }
 
     public function container(): Container

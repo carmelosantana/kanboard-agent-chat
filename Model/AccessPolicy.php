@@ -15,10 +15,10 @@ use Kanboard\Core\Security\Role;
  *
  *  - view:   any project role, or app admin
  *  - post:   member, manager, or app admin (viewers read only)
- *  - ask:    post rights and the project's ask role (managers | members | everyone);
+ *  - ask:    the project's ask role (managers | members | everyone), not post rights;
  *            "everyone" means anyone who can view, viewers included
  *  - manage: project manager or app admin
- *  - ask the bot (canAskBot): ask rights while the project's AI gate is open; posting is checked
+ *  - ask the bot (canAskBot): the ask role and the project's AI gate, not post rights; posting is checked
  *            separately, so a viewer under "everyone" asks in the task drawer only, never the room
  */
 class AccessPolicy extends Base

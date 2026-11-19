@@ -125,6 +125,33 @@ class ToolsTest extends Base
         $this->assertStringContainsString("task_id=$id", $source->url);
     }
 
+    /**
+     * Answers land in the room (or are shared there), so an app admin or manager asker reads
+     * standard comments only: admins gain nothing through the bot.
+     */
+    public function testPrivilegedAskerReadsStandardCommentsOnly(): void
+    {
+        $id = $this->task($this->room, 'Rotate keys');
+        $this->comment($id, 'rotation note for everyone');
+        $this->comment($id, 'rotation note for managers', Role::APP_MANAGER);
+        $this->comment($id, 'rotation note for admins', Role::APP_ADMIN);
+
+        foreach ([Role::APP_ADMIN, Role::APP_MANAGER] as $role) {
+            $asker = $this->user('boss-'.$role, $role);
+            $this->container['projectUserRoleModel']->addUser($this->room, $asker, Role::PROJECT_MEMBER);
+            $scope = $this->scope($asker);
+
+            $task = json_encode($this->json($this->tool(GetTaskTool::class, $scope)->execute(['task_id' => $id])));
+            $found = json_encode($this->json($this->tool(SearchCommentsTool::class, $scope)->execute(['query' => 'rotation'])));
+
+            foreach ([$task, $found] as $out) {
+                $this->assertStringContainsString('rotation note for everyone', $out, $role);
+                $this->assertStringNotContainsString('for managers', $out, $role);
+                $this->assertStringNotContainsString('for admins', $out, $role);
+            }
+        }
+    }
+
     public function testSearchTasksScopedToRoomProject(): void
     {
         $a = $this->task($this->room, 'Login page redesign');
