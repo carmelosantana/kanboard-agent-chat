@@ -33,4 +33,7 @@ interface HostAdapter
 
     /** The public URL of a file in chatparts' assets/ directory (for example 'icons.svg'). */
     public function assetUrl(string $file): string;
+
+    /** The participant id of whoever the page is drawn for (as in `Participant::$id`); null when unknown. */
+    public function viewerId(): ?string;
 }

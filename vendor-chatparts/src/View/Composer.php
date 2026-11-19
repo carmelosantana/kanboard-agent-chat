@@ -11,7 +11,8 @@ use ChatParts\Host\HostAdapter;
  * conversation) and still works as a plain form without JS. Inside: the host's CSRF field, a
  * fresh `client_msg_id` (the server's idempotency key; chatparts.js renews it after each send),
  * the textarea, and a controls bar with attach, the context ring and send. The ring button
- * fetches the ContextMeter on first click and again as the draft changes; the send button
+ * fetches the ContextMeter on first click and again as the draft or its images change
+ * (chatparts.js fires `cp-attachments` on the form, sharing the typing debounce); the send button
  * carries the stop URL so the script can turn it into a stop button while a reply streams.
  */
 final class Composer extends Component
@@ -82,7 +83,7 @@ final class Composer extends Component
         return $this->tag(
             'button',
             ['type' => 'button', 'class' => 'cp-ctl cp-ctl--context']
-                + Hx::attrs(['get' => $url, 'trigger' => 'input changed delay:500ms from:closest form, click once', 'target' => 'this', 'swap' => 'innerHTML'])
+                + Hx::attrs(['get' => $url, 'trigger' => 'input changed delay:500ms from:closest form, cp-attachments delay:500ms from:closest form, click once', 'target' => 'this', 'swap' => 'innerHTML'])
                 + ['aria-controls' => 'cp-context-pop', 'aria-expanded' => 'false'],
             new Icon($this->host, 'gauge') . $this->tag('span', ['class' => 'cp-sr'], $this->e($this->host->t('Context used'))),
         ) . $this->tag('div', ['id' => 'cp-context-pop', 'class' => 'cp-context__pop', 'hidden' => '']);

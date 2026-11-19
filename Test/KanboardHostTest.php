@@ -104,6 +104,19 @@ class KanboardHostTest extends Base
         $this->assertSame((string) $userId, (new Kanboard\Plugin\AgentChat\Model\ParticipantResolver($this->container))->forUser($userId)->id, 'the same id format as participants');
     }
 
+    public function testStoppedReceiptSaysYouOnlyToTheAsker(): void
+    {
+        $ana = (int) $this->container['userModel']->create(['username' => 'ana', 'name' => 'Ana']);
+        $bob = (int) $this->container['userModel']->create(['username' => 'bob', 'name' => 'Bob']);
+        $meta = ['finish_reason' => 'stopped', 'stopped_by' => 'Ana', 'asked_by' => ['id' => (string) $ana, 'name' => 'Ana']];
+
+        $this->container['userSession']->initialize($this->container['userModel']->getById($ana));
+        $this->assertStringContainsString('>stopped by you<', (string) new Receipt($this->host, $meta));
+
+        $this->container['userSession']->initialize($this->container['userModel']->getById($bob));
+        $this->assertStringContainsString('>stopped by Ana<', (string) new Receipt($this->host, $meta));
+    }
+
     public function testEscape(): void
     {
         $this->assertSame('&lt;a href=&quot;x&quot;&gt;&amp;&#039;', $this->host->escape('<a href="x">&\''));

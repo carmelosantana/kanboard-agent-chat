@@ -20,7 +20,7 @@ enum FinishReason: string
     {
         return match ($this) {
             self::Stop => '',
-            self::Stopped => 'stopped by you',
+            self::Stopped => 'stopped',
             self::BudgetExhausted => 'stopped: run budget reached',
             self::Refusal => 'the provider refused',
             self::ContentFilter => 'stopped: content filter',

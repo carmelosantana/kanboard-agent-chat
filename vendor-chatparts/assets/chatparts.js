@@ -162,6 +162,20 @@
     return String(text).trim() === '';
   }
 
+  /**
+   * The name to announce for an SSE frame {type, id, name}: the answering participant's name for a
+   * `final` frame whose message id is not in `announced` (a Set), else ''. The caller adds the id.
+   */
+  function answerToAnnounce(frame, announced) {
+    if (frame.type !== 'final' || !frame.id || !frame.name || announced.has(frame.id)) return '';
+    return frame.name;
+  }
+
+  /** Whether the context ring refetches after the attachment count went from `before` to `after`. */
+  function ringNeedsRefresh(before, after) {
+    return before !== after;
+  }
+
   /** `s` with its first `%s` replaced by `arg`, taken literally. */
   function format(s, arg) {
     return arg === undefined ? s : s.replace('%s', function () { return String(arg); });
@@ -183,6 +197,8 @@
     isBlank: isBlank,
     hasOwnStreaming: hasOwnStreaming,
     setQueryParam: setQueryParam,
+    answerToAnnounce: answerToAnnounce,
+    ringNeedsRefresh: ringNeedsRefresh,
   };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   if (typeof document === 'undefined' || typeof window === 'undefined') return;
@@ -321,12 +337,19 @@
     updateEmpty(form);
   }
 
+  /**
+   * Replace the attachment list. A changed count fires `cp-attachments` on the form, which the
+   * context ring's hx-trigger listens for (sharing its typing debounce); its request then sends
+   * the new `images` count.
+   */
   function setAttachments(form, s, list) {
+    var before = s.list.length;
     s.list = list;
     var keep = new Set(list.map(function (x) { return x.id; }));
     s.files.forEach(function (_f, id) { if (!keep.has(id)) { s.files.delete(id); s.urls.delete(id); } });
     syncFileInput(form, s);
     renderThumbs(form, s);
+    if (ringNeedsRefresh(before, list.length)) form.dispatchEvent(new CustomEvent('cp-attachments', { bubbles: true }));
   }
 
   function addFiles(form, files) {
@@ -596,12 +619,17 @@
     });
   }
 
-  function answeredName(html) {
-    if (typeof DOMParser === 'undefined' || typeof html !== 'string') return '';
+  /** The {id, name} of the bubble in a final frame's HTML, read as text; empty strings when absent. */
+  function answeredBy(html) {
+    if (typeof DOMParser === 'undefined' || typeof html !== 'string') return { id: '', name: '' };
     var doc = new DOMParser().parseFromString(html, 'text/html'); // inert: scripts never run
+    var msg = doc.querySelector('.cp-msg[data-id]');
     var name = doc.querySelector('.cp-msg__name');
-    return name ? name.textContent.trim() : '';
+    return { id: msg ? msg.getAttribute('data-id') : '', name: name ? name.textContent.trim() : '' };
   }
+
+  /** Message ids whose finished answer was announced, so a repeated final frame stays quiet. */
+  var announced = new Set();
 
   // ---- Wiring ---------------------------------------------------------------------------
 
@@ -858,12 +886,21 @@
   });
   document.addEventListener('htmx:oobAfterSwap', onSwapped);
 
+  // Announced before the swap: a final frame usually replaces the bubble that holds the stream,
+  // so its htmx:sseMessage fires on a detached element and never reaches the document.
+  document.addEventListener('htmx:sseBeforeMessage', function (e) {
+    var msg = e.detail || {};
+    if (msg.type !== 'final') return;
+    var by = answeredBy(msg.data);
+    var name = answerToAnnounce({ type: msg.type, id: by.id, name: by.name }, announced);
+    if (!name) return;
+    announced.add(by.id);
+    announce(t('%s answered', name));
+  });
+
   document.addEventListener('htmx:sseMessage', function (e) {
     var msg = e.detail || {};
-    if (msg.type === 'final') {
-      var name = answeredName(msg.data);
-      if (name) announce(t('%s answered', name));
-    } else if (msg.type === 'done') {
+    if (msg.type === 'done') {
       if (msg.target && typeof msg.target.close === 'function') msg.target.close();
       forgetStream(e.target.closest && e.target.closest(STREAM_SEL));
     }
