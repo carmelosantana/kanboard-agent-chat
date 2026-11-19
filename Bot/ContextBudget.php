@@ -22,8 +22,9 @@ use Kanboard\Plugin\AiConnector\Model\ModelCatalog;
  * The window is AiConnector's ModelCatalog::getContextWindow() for the project's profile (its
  * own fallback for a model it does not know); tokens are ModelCatalog::countTokens(). The
  * window fills in this order: instructions, tool definitions, the drawer's task, history (the
- * last 40 messages, oldest dropped first), sources (SOURCES_CAP held back for tool results),
- * the new message with its images (IMAGE_TOKENS each, at most MAX_IMAGES), and REPLY_RESERVE
+ * last 40 messages, oldest dropped first), sources (sourcesCap(): a quarter of the window, at
+ * most SOURCES_CAP, held back for tool results and enforced in the run by SourceCap), the
+ * new message with its images (IMAGE_TOKENS each, at most MAX_IMAGES), and REPLY_RESERVE
  * for the answer. History gives way first; the message is never trimmed: when instructions,
  * tools, task and message leave no room for the reply reserve, the message is too long for
  * the model (`fits` is false) and the bot does not run.
@@ -33,6 +34,7 @@ use Kanboard\Plugin\AiConnector\Model\ModelCatalog;
 class ContextBudget extends Base
 {
     public const HISTORY_LIMIT = 40;
+    /** The most tokens of tool results one answer gets, on any window. */
     public const SOURCES_CAP = 8000;
     public const REPLY_RESERVE = 4000;
     public const IMAGE_TOKENS = 1600;
@@ -81,7 +83,7 @@ class ContextBudget extends Base
      * @param ?array $task the drawer's task row
      * @param list<ToolInterface> $tools
      * @param list<MessageInterface> $history oldest first
-     * @return array{window: int, instructions: string, history: list<MessageInterface>, fits: bool, segments: list<array{key: string, label: string, tokens: int}>}
+     * @return array{window: int, sources_cap: int, instructions: string, history: list<MessageInterface>, fits: bool, segments: list<array{key: string, label: string, tokens: int}>}
      */
     public function fit(int $projectId, int $userId, ?array $task, array $tools, array $history, int $messageTokens): array
     {
@@ -93,7 +95,8 @@ class ContextBudget extends Base
         $toolTokens = $this->tokens((string) json_encode(array_map(static fn (ToolInterface $t): array => $t->toFunctionSchema(), $tools)), $projectId);
         $fixed = $instructionTokens + $toolTokens + $taskTokens + $messageTokens;
 
-        $room = $window - self::REPLY_RESERVE - self::SOURCES_CAP - $fixed;
+        $sourcesCap = self::sourcesCap($window);
+        $room = $window - self::REPLY_RESERVE - $sourcesCap - $fixed;
         $sizes = array_map(fn (MessageInterface $m): int => $this->tokens((string) $m->content(), $projectId), $history);
         while ($history !== [] && array_sum($sizes) > $room) {
             array_shift($history);
@@ -106,6 +109,7 @@ class ContextBudget extends Base
 
         return [
             'window' => $window,
+            'sources_cap' => $sourcesCap,
             'instructions' => $instructions,
             'history' => $history,
             'fits' => $fixed <= $window - self::REPLY_RESERVE,
@@ -114,11 +118,17 @@ class ContextBudget extends Base
                 ['key' => 'tools', 'label' => t('Tools'), 'tokens' => $toolTokens],
                 ['key' => 'task', 'label' => t('Task'), 'tokens' => $taskTokens],
                 ['key' => 'history', 'label' => t('History'), 'tokens' => array_sum($sizes)],
-                ['key' => 'sources_cap', 'label' => t('Sources (cap)'), 'tokens' => self::SOURCES_CAP],
+                ['key' => 'sources_cap', 'label' => t('Sources (cap)'), 'tokens' => $sourcesCap],
                 ['key' => 'message', 'label' => t('Message and images'), 'tokens' => $messageTokens],
                 ['key' => 'reply_reserve', 'label' => t('Reply reserve'), 'tokens' => self::REPLY_RESERVE],
             ],
         ];
+    }
+
+    /** Tool-result tokens one answer may use: a quarter of the window, at most SOURCES_CAP. */
+    public static function sourcesCap(int $window): int
+    {
+        return max(0, min(self::SOURCES_CAP, intdiv($window, 4)));
     }
 
     /**

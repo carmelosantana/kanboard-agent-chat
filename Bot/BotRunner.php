@@ -44,7 +44,7 @@ use Pimple\Container;
  * ContextBudget (oldest history dropped first; a question too long for the model gets no
  * provider call, only "Your message is too long for this model."). Everyone's messages go in
  * as user turns prefixed with their name, the bot's earlier answers as assistant turns, the
- * asker's latest message last. Tool results are held to ContextBudget::SOURCES_CAP (SourceCap).
+ * asker's latest message last. Tool results are held to the fit's sources cap (SourceCap).
  * Every tool reads as the asker (AskerScope); an asker who can no longer view the project gets
  * no run at all.
  *
@@ -161,7 +161,7 @@ class BotRunner extends Base
                     $errorCode = 'too_long';
                 } else {
                     $history = $fit['history'];
-                    $sourceCap = new SourceCap(ContextBudget::SOURCES_CAP, static fn (string $text): int => $budget->tokens($text, $projectId));
+                    $sourceCap = new SourceCap($fit['sources_cap'], static fn (string $text): int => $budget->tokens($text, $projectId));
                     $provider = $this->providerOverride ?? $this->provider((new ProjectSettings($this->container, $projectId))->aiProfile());
                     $model = $provider->getModel();
                     $limits = new LimitsSettings($this->container);

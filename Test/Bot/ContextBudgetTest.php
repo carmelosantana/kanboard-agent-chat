@@ -127,19 +127,18 @@ class ContextBudgetTest extends Base
 
     public function testHistoryTrimmedOldestFirstToFitWindow(): void
     {
-        // 16 384, not 8 192: with the 8 000 sources cap and the 4 000 reply reserve held back,
-        // an 8 192 window has no room for history at all (asserted below).
-        $this->model('anthropic', 'claude-sonnet-5-5', 16384);
+        $this->model('anthropic', 'claude-sonnet-5-5', 8192);
         for ($i = 1; $i <= 45; $i++) {
             $this->say($i % 2 ? $this->bob : $this->ana, sprintf('message %02d ', $i).str_repeat('x', 1000));
         }
 
         $b = $this->budget()->breakdown($this->room, $this->ana, null, 200, 0);
         $t = $this->tokensByKey($b);
-        $this->assertGreaterThan(0, $t['history']);
-        $this->assertLessThanOrEqual(16384, array_sum($t), 'everything fits the window');
+        $this->assertSame(2048, $t['sources_cap'], 'a quarter of an 8 192 window');
+        $this->assertGreaterThan(0, $t['history'], 'an 8 192 window keeps some history');
+        $this->assertLessThanOrEqual(8192, array_sum($t), 'everything fits the window');
         $one = $this->budget()->tokens('Bob: message 01 '.str_repeat('x', 1000), $this->project);
-        $this->assertLessThan($one, 16384 - array_sum($t), 'one more message would not have fitted');
+        $this->assertLessThan($one, 8192 - array_sum($t), 'one more message would not have fitted');
 
         $history = [];
         for ($i = 1; $i <= 39; $i++) {
@@ -151,9 +150,15 @@ class ContextBudgetTest extends Base
         $this->assertSame('Bob: message 39', end($kept), 'the newest stays');
         $this->assertNotContains('Bob: message 01', $kept, 'the oldest go first');
         $this->assertSame(range(40 - count($kept), 39), array_map(static fn (string $s): int => (int) substr($s, 13), $kept), 'a contiguous newest run');
+        $this->assertSame(2048, $fit['sources_cap']);
+    }
 
-        $this->model('anthropic', 'claude-sonnet-5-5', 8192);
-        $this->assertSame([], $this->budget()->fit($this->project, $this->ana, null, $this->tools(), $history, 50)['history']);
+    public function testSourcesCapIsAQuarterOfTheWindowAtMost8000(): void
+    {
+        foreach ([8192 => 2048, 16384 => 4096, 32000 => 8000, 262144 => 8000, 6000 => 1500] as $window => $cap) {
+            $this->model('anthropic', 'claude-sonnet-5-5', $window);
+            $this->assertSame($cap, $this->tokensByKey($this->budget()->breakdown($this->room, $this->ana, null, 0, 0))['sources_cap'], "window $window");
+        }
     }
 
     public function testHistoryNeverOpensWithTheBotsTurn(): void

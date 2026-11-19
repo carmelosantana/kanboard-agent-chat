@@ -396,7 +396,7 @@ class BotRunnerTest extends Base
 
     public function testRoomHistoryKeepsTheLast40AndDropsOldestOverBudget(): void
     {
-        $this->window(16384);
+        $this->window(8192);
         for ($i = 1; $i <= 45; $i++) {
             $this->say($this->bob, sprintf('message %02d ', $i).str_repeat('x', 600));
         }
@@ -466,10 +466,14 @@ class BotRunnerTest extends Base
         $second = $toolTexts($provider->calls[1]);
         $this->assertCount(2, $second);
         $this->assertStringContainsString('Report 10', $second[0], 'under the cap, results go in whole');
-        $this->assertStringContainsString('Report 10', $second[1], 'the result that crosses the cap still goes in');
+        $this->assertSame(true, json_decode($second[1], true)['truncated'] ?? null, 'the result that crosses the cap is cut to what is left of it, as valid JSON');
         $third = $toolTexts($provider->calls[2]);
         $this->assertCount(3, $third);
-        $this->assertSame('Source budget reached; answer with what you have.', end($third), 'past 8 000 tokens of sources, a further result is replaced');
+        $this->assertSame('Source budget reached; answer with what you have.', end($third), 'later results get the fixed text');
+        $budget = new \Kanboard\Plugin\AgentChat\Bot\ContextBudget($this->container);
+        $sources = array_sum(array_map(fn (string $t): int => $budget->tokens($t, $this->project), array_slice($third, 0, 2)));
+        $this->assertLessThanOrEqual(8000, $sources, 'what the model got of the sources stays within the cap');
+        $this->assertGreaterThan(7900, $sources, 'and uses it');
     }
 
     public function testDoneToolAnswerAppearsInFinal(): void

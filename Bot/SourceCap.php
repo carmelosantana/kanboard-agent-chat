@@ -3,16 +3,23 @@
 namespace Kanboard\Plugin\AgentChat\Bot;
 
 use CarmeloSantana\PHPAgents\Contract\ToolInterface;
+use CarmeloSantana\PHPAgents\Enum\ToolResultStatus;
 use CarmeloSantana\PHPAgents\Tool\ToolResult;
 use Closure;
 
 /**
- * Holds one run's tool results to the sources cap: once the results passed to the model add
- * up to more than $cap tokens, a further call is not run and the model gets TEXT instead.
+ * Holds one run's tool results to the sources cap ($cap tokens, as $count estimates them).
+ * Results go in whole while they fit what is left of the cap. The one that does not fit is cut
+ * to what is left, as JSON: `{"untrusted": true, "truncated": true, "note": …, "partial": "<the
+ * result's first characters>"}` (cut on a character boundary, the wrapper counted in). When too
+ * little is left for any partial, and for every call after the cap is used up, the tool is not
+ * run and the model gets TEXT. So the results the model gets total at most $cap tokens; the
+ * only overhead past it is TEXT itself (about 13 tokens) once per call after the cap.
  */
 final class SourceCap
 {
     public const TEXT = 'Source budget reached; answer with what you have.';
+    private const NOTE = 'Cut to the source budget: only the start of this result is here. Answer with what you have.';
 
     private int $used = 0;
 
@@ -63,11 +70,42 @@ final class SourceCap
 
     public function execute(ToolInterface $tool, array $input): ToolResult
     {
-        if ($this->used > $this->cap) {
+        $left = $this->cap - $this->used;
+        if ($left <= 0) {
             return ToolResult::success(self::TEXT);
         }
         $result = $tool->execute($input);
-        $this->used += ($this->count)($result->content);
-        return $result;
+        $tokens = ($this->count)($result->content);
+        if ($tokens <= $left) {
+            $this->used += $tokens;
+            return $result;
+        }
+
+        $this->used = $this->cap;
+        $cut = $this->cut($result->content, $left);
+        return $cut === null
+            ? ToolResult::success(self::TEXT)
+            : new ToolResult(ToolResultStatus::Success, $cut, mimeType: 'application/json');
+    }
+
+    /** The longest start of $content whose JSON wrapper is at most $tokens; null when none is. */
+    private function cut(string $content, int $tokens): ?string
+    {
+        $content = mb_scrub($content, 'UTF-8');
+        $wrap = static fn (string $partial): string => (string) json_encode(
+            ['untrusted' => true, 'truncated' => true, 'note' => self::NOTE, 'partial' => $partial],
+            JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE,
+        );
+        // The wrapper only grows with the partial, so the longest that fits is a binary search.
+        [$lo, $hi] = [0, mb_strlen($content, 'UTF-8')];
+        while ($lo < $hi) {
+            $mid = intdiv($lo + $hi + 1, 2);
+            if (($this->count)($wrap(mb_substr($content, 0, $mid, 'UTF-8'))) <= $tokens) {
+                $lo = $mid;
+            } else {
+                $hi = $mid - 1;
+            }
+        }
+        return $lo === 0 ? null : $wrap(mb_substr($content, 0, $lo, 'UTF-8'));
     }
 }
