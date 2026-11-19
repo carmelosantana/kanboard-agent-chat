@@ -94,6 +94,6 @@ class Plugin extends Base
     public function getPluginDescription(): string { return t('Project chat rooms for people and agents, with an AI project bot.'); }
     public function getPluginAuthor(): string      { return 'Carmelo Santana'; }
     public function getPluginVersion(): string     { return '0.1.0'; }
-    public function getPluginHomepage(): string    { return 'https://github.com/carmelosantana/kanboard-agentchat'; }
+    public function getPluginHomepage(): string    { return 'https://github.com/carmelosantana/kanboard-agent-chat'; }
     public function getCompatibleVersion(): string { return '>=1.2.47'; }
 }

@@ -3,7 +3,7 @@
     "description": "Project chat rooms for people and agents, with an AI project bot that answers from the board and the project's knowledge.",
     "version": "0.1.0",
     "author": "Carmelo Santana",
-    "homepage": "https://github.com/carmelosantana/kanboard-agentchat",
+    "homepage": "https://github.com/carmelosantana/kanboard-agent-chat",
     "license": "MIT",
     "kanboard_version": ">=1.2.47",
     "php_version": ">=8.4",

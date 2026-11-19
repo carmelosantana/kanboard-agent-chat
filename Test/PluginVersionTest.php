@@ -16,6 +16,14 @@ class PluginVersionTest extends Base
         $this->assertSame('AgentChat', (new Plugin($this->container))->getPluginName());
     }
 
+    // The release repo is carmelosantana/kanboard-agent-chat (spec); ModMenu links the homepage.
+    public function testHomepageNamesTheReleaseRepo(): void
+    {
+        $json = json_decode(file_get_contents(__DIR__.'/../plugin.json'), true);
+        $this->assertSame('https://github.com/carmelosantana/kanboard-agent-chat', $json['homepage']);
+        $this->assertSame($json['homepage'], (new Plugin($this->container))->getPluginHomepage());
+    }
+
     // ModMenu reads {plugin, min_version, reason} with a BARE version; any other shape is silently dropped.
     public function testRecommendsUsesModMenuDependencyShape(): void
     {
