@@ -25,6 +25,8 @@ class KanboardHost extends Base implements HostAdapter
         'stop' => ['RoomController', 'stop'],
         'context' => ['RoomController', 'context'],
         'stream' => ['StreamController', 'stream'],
+        'file' => ['FileController', 'show'],
+        'thumb' => ['FileController', 'thumb'],
     ];
 
     private const TONES = ['blue', 'green', 'orange', 'pink', 'purple', 'red', 'slate', 'teal'];

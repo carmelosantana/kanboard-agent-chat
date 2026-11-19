@@ -8,6 +8,7 @@ use CarmeloSantana\PHPAgents\Contract\MessageInterface;
 use CarmeloSantana\PHPAgents\Contract\ProviderInterface;
 use CarmeloSantana\PHPAgents\Enum\AgentFinishReason;
 use CarmeloSantana\PHPAgents\Enum\ToolResultStatus;
+use CarmeloSantana\PHPAgents\Image\ImageInputException;
 use CarmeloSantana\PHPAgents\Message\Conversation;
 use CarmeloSantana\PHPAgents\Message\UserMessage;
 use CarmeloSantana\PHPAgents\Provider\AbstractProvider;
@@ -27,6 +28,7 @@ use ChatParts\Model\ToolState;
 use InvalidArgumentException;
 use Kanboard\Core\Base;
 use Kanboard\Plugin\AgentChat\Model\AccessPolicy;
+use Kanboard\Plugin\AgentChat\Model\FileModel;
 use Kanboard\Plugin\AgentChat\Model\LimitsSettings;
 use Kanboard\Plugin\AgentChat\Model\MessageModel;
 use Kanboard\Plugin\AgentChat\Model\ParticipantResolver;
@@ -44,7 +46,9 @@ use Pimple\Container;
  * ContextBudget (oldest history dropped first; a question too long for the model gets no
  * provider call, only "Your message is too long for this model."). Everyone's messages go in
  * as user turns prefixed with their name, the bot's earlier answers as assistant turns, the
- * asker's latest message last. Tool results are held to the fit's sources cap (SourceCap).
+ * asker's latest message last, with its images when the project's botImages() setting is on
+ * (StorageImageResolver; an image it refuses leaves the question as text). Tool results are
+ * held to the fit's sources cap (SourceCap).
  * Every tool reads as the asker (AskerScope); an asker who can no longer view the project gets
  * no run at all.
  *
@@ -153,8 +157,9 @@ class BotRunner extends Base
                 $tools = ChatAgent::readTools($scope, $sources);
                 $task = $scope->taskId === null ? null : ($this->taskFinderModel->getById($scope->taskId) ?: null);
 
-                [$history, $question] = $this->conversation($messages, $draft, $askerId);
-                $fit = $question === null ? null : $budget->fit($projectId, $askerId, $task, $tools, $history, $budget->tokens((string) $question->content(), $projectId));
+                [$history, $questionText, $questionId] = $this->conversation($messages, $draft, $askerId);
+                $images = $questionId === null ? [] : $this->imageRefs($questionId, $projectId);
+                $fit = $questionText === null ? null : $budget->fit($projectId, $askerId, $task, $tools, $history, $budget->tokens($questionText, $projectId) + count($images) * ContextBudget::IMAGE_TOKENS);
                 if ($fit === null) {
                     $errorCode = 'no_question';
                 } elseif (! $fit['fits']) {
@@ -164,8 +169,9 @@ class BotRunner extends Base
                     $sourceCap = new SourceCap($fit['sources_cap'], static fn (string $text): int => $budget->tokens($text, $projectId), $sources);
                     $provider = $this->providerOverride ?? $this->provider((new ProjectSettings($this->container, $projectId))->aiProfile());
                     $model = $provider->getModel();
+                    [$question, $imageBytesTokens] = $this->question($questionText, $images, $askerId, (int) $run['room_id'], $runId);
                     $limits = new LimitsSettings($this->container);
-                    $agent = new ChatAgent($provider, $fit['instructions'], $sourceCap->wrap($tools), $limits->maxIterations(), $limits->runLimits(max(1, $fit['window'] - $fit['reply_reserve'])), $token);
+                    $agent = new ChatAgent($provider, $fit['instructions'], $sourceCap->wrap($tools), $limits->maxIterations(), $limits->runLimits(max(1, $fit['window'] - $fit['reply_reserve']) + $imageBytesTokens), $token);
                     $agent->attach(new CallbackObserver(fn (string $event, mixed $data) => $this->observe($runId, $event, $data, $sink)));
                     $conversation = new Conversation();
                     foreach ($history as $message) {
@@ -214,10 +220,10 @@ class BotRunner extends Base
     }
 
     /**
-     * The thread before the draft as php-agents messages, and the asker's latest message in it
-     * (null when there is none).
+     * The thread before the draft as php-agents messages, and the asker's latest message in it:
+     * its text with the author prefix and its id (both null when there is none).
      *
-     * @return array{0: list<MessageInterface>, 1: ?UserMessage}
+     * @return array{0: list<MessageInterface>, 1: ?string, 2: ?int}
      */
     private function conversation(MessageModel $messages, array $draft, int $askerId): array
     {
@@ -237,11 +243,57 @@ class BotRunner extends Base
             }
         }
         if ($question === null) {
-            return [[], null];
+            return [[], null, null];
         }
 
         $budget = new ContextBudget($this->container);
-        return [$budget->history($rows, $question), new UserMessage($budget->author($askerId).': '.$rows[$question]['body_text'])];
+        return [$budget->history($rows, $question), $budget->author($askerId).': '.$rows[$question]['body_text'], (int) $rows[$question]['id']];
+    }
+
+    /**
+     * References to the question's images, when the project sends images to the bot.
+     *
+     * @return list<string>
+     */
+    private function imageRefs(int $messageId, int $projectId): array
+    {
+        if (! (new ProjectSettings($this->container, $projectId))->botImages()) {
+            return [];
+        }
+        $files = array_slice((new FileModel($this->container))->forMessage($messageId), 0, ContextBudget::MAX_IMAGES);
+        return array_map(static fn (array $f): string => StorageImageResolver::reference((int) $f['id']), $files);
+    }
+
+    /**
+     * The question as a php-agents message, with its images when there are any and the resolver
+     * accepts every one (otherwise the text alone, and the log says why), and how many tokens
+     * php-agents' bytes / 4 estimate puts on the images' data URIs. The fit already counted each
+     * image as ContextBudget::IMAGE_TOKENS, so that many more go on the run's input limit: the
+     * limit then holds the text to what the fit allowed instead of refusing any sizeable image.
+     *
+     * @param list<string> $images
+     * @return array{0: UserMessage, 1: int}
+     */
+    private function question(string $text, array $images, int $askerId, int $roomId, int $runId): array
+    {
+        $plain = new UserMessage($text);
+        if ($images === []) {
+            return [$plain, 0];
+        }
+        try {
+            $message = UserMessage::withImages($text, $images, new StorageImageResolver($this->container, $askerId, $roomId));
+        } catch (ImageInputException $e) {
+            $this->logger->warning("AgentChat: bot run #$runId goes without images: ".$e->getMessage());
+            return [$plain, 0];
+        }
+        return [$message, max(0, $this->estimate($message) - $this->estimate($plain))];
+    }
+
+    private function estimate(UserMessage $message): int
+    {
+        $single = new Conversation();
+        $single->add($message);
+        return $single->estimateTokens();
     }
 
     private function observe(int $runId, string $event, mixed $data, RunEventSink $sink): void

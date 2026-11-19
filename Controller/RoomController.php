@@ -2,6 +2,7 @@
 
 namespace Kanboard\Plugin\AgentChat\Controller;
 
+use ChatParts\Model\Part\FilePart;
 use ChatParts\Model\Part\TextPart;
 use ChatParts\View\ContextMeter;
 use ChatParts\View\Notice;
@@ -16,8 +17,10 @@ use Kanboard\Plugin\AgentChat\Helper\KanboardHost;
 use Kanboard\Plugin\AgentChat\Model\AccessPolicy;
 use Kanboard\Plugin\AgentChat\Model\AiGate;
 use Kanboard\Plugin\AgentChat\Model\Busy;
+use Kanboard\Plugin\AgentChat\Model\FileModel;
 use Kanboard\Plugin\AgentChat\Model\MessageModel;
 use Kanboard\Plugin\AgentChat\Model\ParticipantResolver;
+use Kanboard\Plugin\AgentChat\Model\ProjectSettings;
 use Kanboard\Plugin\AgentChat\Model\RateLimited;
 use Kanboard\Plugin\AgentChat\Model\RoomModel;
 use Kanboard\Plugin\AgentChat\Model\RunModel;
@@ -29,6 +32,10 @@ use Kanboard\Plugin\AgentChat\Model\RunModel;
  * The room is always the project's (route param project_id), looked up after the access
  * check; a client never names a room, sender, visibility or recipient. A `room` param that
  * is not the project's room is refused.
+ *
+ * A message may carry up to four images (`images[]`, multipart): all are checked before anything
+ * is stored (FileModel::checkAll; any refusal is a 400 Notice and nothing is posted), then the
+ * files, then the message with a FilePart per image after its text. Text stays required.
  *
  * A sent message that mentions @bot (Mention), from someone who may ask while the project's
  * bot gate is open, also gets the bot's draft and a run: the response carries the draft wired
@@ -123,27 +130,60 @@ class RoomController extends BaseController
 
         $room = (new RoomModel($this->container))->forProject($projectId);
         $this->assertRoomParam($room);
+        // Images are checked as a batch before anything is stored; text stays required.
+        $files = new FileModel($this->container);
+        $uploads = FileModel::uploads($this->request->getFileInfo('images'));
+        if (($error = MessageModel::validateBody($body)) !== null) {
+            $this->notice($error);
+            return;
+        }
+        try {
+            $files->checkAll($uploads);
+        } catch (InvalidArgumentException $e) {
+            $this->notice($e->getMessage());
+            return;
+        }
+
         $clientMsgId = $this->request->getRawValue('client_msg_id');
         $messages = new MessageModel($this->container);
+        $sender = (new ParticipantResolver($this->container))->forUser($userId);
+        $text = new TextPart('t'.bin2hex(random_bytes(8)), $body); // unique: the bubble's DOM id derives from it
+        // A retry stores nothing new: create() below returns the first message, images and all.
+        $isRetry = $messages->idForClientMsgId((int) $room['id'], $sender, $clientMsgId) !== null;
+        [$stored, $fileParts] = $isRetry ? [[], []] : $this->storeImages($files, (int) $room['id'], $userId, $uploads);
+        if ($stored === null) {
+            $this->response->html((string) new Notice(new KanboardHost($this->container), 'error', t('The images could not be stored. Nothing was sent.')), 500);
+            return;
+        }
         try {
             $id = $messages->create(
                 (int) $room['id'],
-                (new ParticipantResolver($this->container))->forUser($userId),
-                [new TextPart('t'.bin2hex(random_bytes(8)), $body)], // unique: the bubble's DOM id derives from it
+                $sender,
+                [$text, ...$fileParts],
                 $clientMsgId === null || $clientMsgId === '' ? [] : ['client_msg_id' => $clientMsgId],
             );
         } catch (InvalidArgumentException $e) {
-            // Body problems already have a translated message; anything else (a malformed
-            // client_msg_id) gets a fixed one rather than the model's developer text.
-            $this->notice(MessageModel::validateBody($body) ?? t('This message could not be sent.'));
+            // Body problems were answered above; anything else (a malformed client_msg_id)
+            // gets a fixed message rather than the model's developer text.
+            $files->remove($stored);
+            $this->notice(t('This message could not be sent.'));
             return;
+        } catch (\Throwable $e) {
+            $files->remove($stored);
+            throw $e;
+        }
+        if ($stored !== []) {
+            // Lost a race on client_msg_id: the other request's message (and images) stands.
+            $ours = in_array('f'.$stored[0], array_column(json_decode((string) $messages->getById($id)['parts'], true) ?: [], 'id'), true);
+            $ours ? $files->linkToMessage($stored, $id) : $files->remove($stored);
         }
 
         $turn = null;
         $limit = null;
         $limitStatus = 429;
         if (Mention::ofBot($body) && $policy->canAsk($userId, $projectId) && AiGate::isOpenFor($this->container, $projectId)) {
-            if (! (new ContextBudget($this->container))->questionFits($projectId, $userId, $body)) {
+            $botImages = (new ProjectSettings($this->container, $projectId))->botImages() ? count($uploads) : 0;
+            if (! (new ContextBudget($this->container))->questionFits($projectId, $userId, $body, $botImages)) {
                 [$limit, $limitStatus] = [t('Your message is too long for this model.'), 413];
             } else {
                 try {
@@ -176,6 +216,38 @@ class RoomController extends BaseController
             return;
         }
         $this->response->html($html);
+    }
+
+    /**
+     * Stores the checked uploads before their message exists (message_id NULL: no one can read
+     * them yet), so the message is created with its FileParts in one write and no poll ever
+     * shows it without its images. Returns the file ids and their parts (root-relative URLs to
+     * FileController); on a failed write, removes what was written and returns [null, []].
+     * Compensation rather than a DB transaction: the blobs live outside the database, and a
+     * failed insert inside a Postgres transaction would break create()'s client_msg_id race
+     * recovery.
+     *
+     * @param list<array> $uploads
+     * @return array{0: ?list<int>, 1: list<FilePart>}
+     */
+    private function storeImages(FileModel $files, int $roomId, int $userId, array $uploads): array
+    {
+        $host = new KanboardHost($this->container);
+        $stored = [];
+        $parts = [];
+        try {
+            foreach ($uploads as $upload) {
+                $fileId = $files->store($roomId, null, $userId, $upload);
+                $stored[] = $fileId;
+                $file = $files->get($fileId);
+                $parts[] = new FilePart('f'.$fileId, (string) $file['name'], (string) $file['mime'], $host->url('file', ['id' => $fileId]), $file['thumb_key'] === null ? null : $host->url('thumb', ['id' => $fileId]));
+            }
+            return [$stored, $parts];
+        } catch (\Throwable $e) {
+            $this->logger->error('AgentChat: images not stored: '.get_class($e).': '.$e->getMessage());
+            $files->remove($stored);
+            return [null, []];
+        }
     }
 
     /**

@@ -131,6 +131,19 @@ class MessageModel extends Base
         throw new RuntimeException("Could not store the message in room #$roomId.");
     }
 
+    /**
+     * The id of $p's message in the room with this client_msg_id, if one is stored; null for a
+     * malformed id. What create() would return for a retry.
+     */
+    public function idForClientMsgId(int $roomId, Participant $p, mixed $clientMsgId): ?int
+    {
+        if (! is_string($clientMsgId) || ! preg_match(self::CLIENT_MSG_ID, $clientMsgId)) {
+            return null;
+        }
+        [$senderKind, $senderId] = $this->sender($p);
+        return $this->findByClientMsgId($roomId, $senderKind, $senderId, $clientMsgId);
+    }
+
     public function getById(int $id): ?array
     {
         return $this->db->table(self::TABLE)->eq('id', $id)->findOne() ?: null;

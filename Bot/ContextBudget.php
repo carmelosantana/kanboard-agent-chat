@@ -79,11 +79,12 @@ class ContextBudget extends Base
         return ['window' => $fit['window'], 'segments' => $fit['segments']];
     }
 
-    /** Whether a room question (the message body) fits the project's model at all. */
-    public function questionFits(int $projectId, int $userId, string $body): bool
+    /** Whether a room question (the message body and the images the bot would get) fits the project's model at all. */
+    public function questionFits(int $projectId, int $userId, string $body, int $imageCount = 0): bool
     {
         $tools = ChatAgent::readTools(new AskerScope($this->container, $userId, $projectId), new SourceRegistry());
-        return $this->fit($projectId, $userId, null, $tools, [], $this->tokens($this->author($userId).': '.$body, $projectId))['fits'];
+        $images = max(0, min(self::MAX_IMAGES, $imageCount)) * self::IMAGE_TOKENS;
+        return $this->fit($projectId, $userId, null, $tools, [], $this->tokens($this->author($userId).': '.$body, $projectId) + $images)['fits'];
     }
 
     /**

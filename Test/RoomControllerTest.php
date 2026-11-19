@@ -372,7 +372,9 @@ class RoomControllerTest extends Base
         $this->assertStringContainsString('<form class="cp-box"', $html);
         $this->assertStringContainsString('name="csrf_token"', $html);
         $this->assertStringNotContainsString('name="room"', $html, 'the room is the project\'s, never posted by the client');
-        $this->assertStringNotContainsString('data-action="attach"', $html, 'no images yet');
+        $this->assertStringContainsString('data-action="attach"', $html, 'members attach images, whatever the bot setting');
+        $this->assertStringContainsString('enctype="multipart/form-data"', $html);
+        $this->assertStringContainsString('name="images[]"', $html);
         $this->assertStringNotContainsString('@bot', $html, 'no AiConnector in tests: the bot is not offered');
         $this->assertStringContainsString('cp-rail', $html);
         $this->assertStringContainsString('Mia Member', $html);

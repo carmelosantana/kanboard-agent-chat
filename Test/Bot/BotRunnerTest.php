@@ -1,6 +1,7 @@
 <?php
 require_once 'tests/units/Base.php';
 require_once __DIR__.'/FakeProvider.php';
+require_once __DIR__.'/../ImageFixtures.php';
 
 use ChatParts\Model\Message;
 use ChatParts\Model\MessageStatus;
@@ -28,6 +29,7 @@ class BotRunnerTest extends Base
     private int $asker;
     private int $bob;
     private MessageModel $messages;
+    private ?string $storeDir = null;
     /** @var list<array{0: string, 1: mixed}> */
     private array $events = [];
 
@@ -49,6 +51,34 @@ class BotRunnerTest extends Base
         $this->container['projectUserRoleModel']->addUser($this->project, $this->bob, Role::PROJECT_MEMBER);
         $this->messages = new MessageModel($this->container);
         $this->window(200000);
+    }
+
+    protected function tearDown(): void
+    {
+        if ($this->storeDir !== null) {
+            ImageFixtures::remove($this->storeDir);
+        }
+        parent::tearDown();
+    }
+
+    /** A PNG attached to the asker's latest message (the question of the last ask()); returns the file id. */
+    private function attachToQuestion(?string $bytes = null): int
+    {
+        if ($this->storeDir === null) {
+            $this->storeDir = ImageFixtures::tempDir('agentchat-store-');
+            mkdir($this->storeDir);
+            $this->container['objectStorage'] = new \Kanboard\Core\ObjectStorage\FileStorage($this->storeDir);
+        }
+        $question = (int) $this->container['db']->table(MessageModel::TABLE)->eq('sender_id', $this->asker)->desc('id')->findOneColumn('id');
+        $upload = (new ImageFixtures($this->storeDir.'/uploads'))->upload($bytes ?? ImageFixtures::png(), 'shot.png');
+        return (new \Kanboard\Plugin\AgentChat\Model\FileModel($this->container))->store($this->room, $question, $this->asker, $upload);
+    }
+
+    /** The content of the last message of the provider's first call: the question. */
+    private function sentQuestion(FakeProvider $provider): string|array
+    {
+        $messages = $provider->calls[0]['messages'];
+        return end($messages)->content();
     }
 
     /** The default AiConnector profile, its context window cached as $tokens (no discovery). */
@@ -629,5 +659,52 @@ class BotRunnerTest extends Base
         $this->assertSame(MessageStatus::Error, $final->status, 'the sink gets what is stored');
         $this->assertSame('The bot could not answer.', $this->text($final));
         $this->assertSame(['delta', 'delta', 'final'], $this->eventNames());
+    }
+
+    public function testImagesReachTheModelWhenTheSettingIsOn(): void
+    {
+        $runId = $this->ask('@bot what is in this screenshot?');
+        $noise = ImageFixtures::noise(600, 600);
+        $this->assertGreaterThan(200000 * 4, strlen($noise), 'as text, its bytes alone would be over the whole window');
+        $this->attachToQuestion($noise);
+        $provider = new FakeProvider([[FakeProvider::text('A red square.')]]);
+
+        $final = $this->runBot($runId, $provider);
+
+        $this->assertSame(MessageStatus::Done, $final->status, 'image bytes do not count against the input limit as text');
+        $content = $this->sentQuestion($provider);
+        $this->assertIsArray($content);
+        $this->assertSame(['type' => 'text', 'text' => 'Ana: @bot what is in this screenshot?'], $content[0]);
+        $this->assertSame('image_url', $content[1]['type']);
+        $this->assertStringStartsWith('data:image/png;base64,', $content[1]['image_url']['url']);
+        $this->assertCount(2, $content);
+    }
+
+    public function testImagesSkippedWhenSettingOff(): void
+    {
+        (new \Kanboard\Plugin\AgentChat\Model\ProjectSettings($this->container, $this->project))->setBotImages(false);
+        $runId = $this->ask('@bot what is in this screenshot?');
+        $this->attachToQuestion();
+        $provider = new FakeProvider([[FakeProvider::text('I cannot see images.')]]);
+
+        $this->runBot($runId, $provider);
+
+        $this->assertSame('Ana: @bot what is in this screenshot?', $this->sentQuestion($provider));
+        $this->assertStringNotContainsString('data:image', $provider->sentText());
+    }
+
+    public function testAnImageThatCannotBeReadLeavesTheQuestionAsText(): void
+    {
+        $runId = $this->ask('@bot see this?');
+        $file = (new \Kanboard\Plugin\AgentChat\Model\FileModel($this->container))->get($this->attachToQuestion());
+        $this->container['objectStorage']->remove($file['storage_key']);
+        $this->container['logger'] = $this->createMock(\Psr\Log\LoggerInterface::class);
+        $this->container['logger']->expects($this->once())->method('warning')->with($this->stringContains('goes without images'));
+        $provider = new FakeProvider([[FakeProvider::text('Text only.')]]);
+
+        $final = $this->runBot($runId, $provider);
+
+        $this->assertSame(MessageStatus::Done, $final->status);
+        $this->assertSame('Ana: @bot see this?', $this->sentQuestion($provider));
     }
 }
