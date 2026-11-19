@@ -4,6 +4,7 @@ require_once 'tests/units/Base.php';
 use ChatParts\Model\MessageStatus;
 use ChatParts\Model\Part\TextPart;
 use JsonRPC\Exception\AccessDeniedException;
+use JsonRPC\Exception\ResponseException;
 use KanboardTests\units\Base;
 use Kanboard\Core\Http\Request;
 use Kanboard\Core\Http\Response;
@@ -130,8 +131,14 @@ class RoomProcedureTest extends Base
     {
         // No user session: Kanboard's application token. A post needs a sender; reads run as a user.
         $this->assertFalse($this->container['userSession']->isLogged());
-        $this->assertDenied(fn () => $this->rpc()->chatSendMessage($this->project, 'hello'));
-        $this->assertDenied(fn () => $this->rpc()->chatRoomMessages($this->project));
+        foreach ([fn () => $this->rpc()->chatSendMessage($this->project, 'hello'), fn () => $this->rpc()->chatRoomMessages($this->project)] as $i => $call) {
+            try {
+                $call();
+                $this->fail("Call #$i: expected a refusal");
+            } catch (ResponseException $e) {
+                $this->assertSame([403, 'Forbidden', 'A user API token is required; the application token has no user.'], [$e->getCode(), $e->getMessage(), $e->getData()], "Call #$i");
+            }
+        }
         $this->assertSame(0, $this->messageCount());
     }
 
@@ -261,7 +268,7 @@ class RoomProcedureTest extends Base
         $this->assertSame(0, $this->roomCount());
     }
 
-    public function testReadIsRoomOnlyCursorPagedAndHoldsBackBotDrafts(): void
+    public function testReadIsRoomOnlyCursorPagedWithFinalBotMessages(): void
     {
         $roomId = (int) (new RoomModel($this->container))->forProject($this->project)['id'];
         $model = new MessageModel($this->container);
@@ -270,8 +277,8 @@ class RoomProcedureTest extends Base
         $ids = [];
         $ids['first'] = $model->create($roomId, $mia, [new TextPart('a', '**bold** <i>x</i>')]);
         $ids['private'] = $model->create($roomId, $mia, [new TextPart('b', 'secret')], ['visibility' => 'private', 'private_to' => $this->member, 'task_id' => 1]);
-        $ids['draft'] = $model->create($roomId, $resolver->bot(), [], ['status' => MessageStatus::Streaming->value]);
-        $ids['submitted'] = $model->create($roomId, $resolver->bot(), [], ['status' => MessageStatus::Submitted->value]);
+        // A private bot draft (drawer answer) never holds the room back.
+        $model->create($roomId, $resolver->bot(), [], ['status' => MessageStatus::Streaming->value, 'visibility' => 'private', 'private_to' => $this->member, 'task_id' => 1]);
         $ids['answer'] = $model->create($roomId, $resolver->bot(), [new TextPart('c', 'the answer')], ['status' => MessageStatus::Done->value]);
         $ids['stopped'] = $model->create($roomId, $resolver->bot(), [new TextPart('d', 'half')], ['status' => MessageStatus::Stopped->value]);
         $ids['failed'] = $model->create($roomId, $resolver->bot(), [], ['status' => MessageStatus::Error->value]);
@@ -291,6 +298,29 @@ class RoomProcedureTest extends Base
         $this->assertSame([$ids['last']], array_column($this->rpc()->chatRoomMessages($this->project, (string) $ids['failed'], '50'), 'id'));
         $this->assertSame([$ids['first']], array_column($this->rpc()->chatRoomMessages($this->project, 0, 0), 'id'), 'limit clamps up to 1');
         $this->assertSame([$ids['first']], array_column($this->rpc()->chatRoomMessages($this->project, null, -5), 'id'));
+    }
+
+    public function testUnfinishedBotDraftEndsThePageUntilItIsFinal(): void
+    {
+        $roomId = (int) (new RoomModel($this->container))->forProject($this->project)['id'];
+        $model = new MessageModel($this->container);
+        $resolver = new ParticipantResolver($this->container);
+        $mia = $resolver->forUser($this->member);
+        $before = $model->create($roomId, $mia, [new TextPart('a', '@bot status?')]);
+        $draft = $model->create($roomId, $resolver->bot(), [], ['status' => MessageStatus::Submitted->value]);
+        $later = $model->create($roomId, $mia, [new TextPart('b', 'also, hi')]);
+
+        $this->actAs($this->member);
+        $this->assertSame([$before], array_column($this->rpc()->chatRoomMessages($this->project), 'id'));
+        $this->assertSame([], $this->rpc()->chatRoomMessages($this->project, $before), 'nothing past the draft yet');
+
+        $model->update($draft, ['parts' => [new TextPart('c', 'partial')], 'status' => MessageStatus::Streaming->value]);
+        $this->assertSame([], $this->rpc()->chatRoomMessages($this->project, $before), 'still streaming');
+
+        $model->update($draft, ['parts' => [new TextPart('c', 'All green.')], 'status' => MessageStatus::Done->value]);
+        $page = $this->rpc()->chatRoomMessages($this->project, $before);
+        $this->assertSame([$draft, $later], array_column($page, 'id'));
+        $this->assertSame('All green.', $page[0]['text']);
     }
 
     public function testReadLimitClampsTo100(): void

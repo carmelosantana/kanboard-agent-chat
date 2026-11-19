@@ -72,6 +72,26 @@ KANBOARD_URL=http://localhost:8081/jsonrpc.php KANBOARD_USER=<manager> KANBOARD_
   php scripts/import-saveit-fixture.php <project_id> [Test/fixtures/saveit-sample.json]
 ```
 
+## Chat API
+
+Agents (and people) post to and read a project's room over JSON-RPC as themselves.
+
+| Procedure | Params | Returns |
+|---|---|---|
+| `chatSendMessage` | `project_id`, `body` (1–8 000 characters after trimming, ≤ 64 KiB raw), `client_msg_id` (optional, 1–64 of `A-Za-z0-9_-`; resending it returns the same id) | `{"message_id": <id>}` |
+| `chatRoomMessages` | `project_id`, `after` (message id, default 0), `limit` (1–100, default 50) | `[{"id", "sender_kind", "sender_name", "text", "created_at"}]`, oldest first |
+
+Both need a user's API credentials (username with password or personal token). Posting needs the
+member or manager role (or app admin), reading any project role. Anyone else, an inactive user or
+an unknown project gets `403 Forbidden`; the application token gets `403` with `data` saying a
+user token is required. `text` and `sender_name` are plain text. Private drawer messages never
+appear.
+
+A page of `chatRoomMessages` ends just before the first bot answer still being written, so a
+reader that pages with `after` never skips an answer; it sees nothing newer until that answer is
+final (done, stopped or error). The wait is bounded: a crashed or stuck bot run is finalised as an
+error within the run time limit plus a grace period.
+
 ## chatparts
 
 The UI kit lives in `vendor-chatparts/`, a hash-checked copy of the chatparts kit. Do not edit it by

@@ -154,23 +154,30 @@ class MessageModel extends Base
     }
 
     /**
-     * Like listAfter() without bot drafts: a bot message appears only once final (done, stopped
-     * or error), so an API reader gets complete answers. A draft older than the reader's cursor
-     * is not shown later; the API documents it.
+     * Room messages with id > $afterId, oldest first, at most $limit, ending just before the first
+     * unfinished bot message (submitted or streaming): what an API reader gets. A cursor never
+     * moves past an answer still being written, so no answer is skipped; the reader sees nothing
+     * new until it is final (done, stopped or error). The stall is bounded: the run lifecycle
+     * finalises a crashed or stuck run as error within the run time limit plus a grace period.
      */
-    public function listFinalAfter(int $roomId, int $afterId, int $limit = 50): array
+    public function listSettledAfter(int $roomId, int $afterId, int $limit = 50): array
     {
-        return $this->db->table(self::TABLE)
+        $query = $this->db->table(self::TABLE)
+            ->eq('room_id', $roomId)
+            ->eq('visibility', 'room')
+            ->gt('id', $afterId);
+        $draft = $this->db->table(self::TABLE)
             ->eq('room_id', $roomId)
             ->eq('visibility', 'room')
             ->gt('id', $afterId)
-            ->beginOr()
-                ->neq('sender_kind', 'bot')
-                ->notIn('status', [MessageStatus::Submitted->value, MessageStatus::Streaming->value])
-            ->closeOr()
+            ->eq('sender_kind', 'bot')
+            ->in('status', [MessageStatus::Submitted->value, MessageStatus::Streaming->value])
             ->asc('id')
-            ->limit(max(1, min($limit, 200)))
-            ->findAll();
+            ->findOneColumn('id');
+        if ($draft) {
+            $query->lt('id', (int) $draft);
+        }
+        return $query->asc('id')->limit(max(1, min($limit, 200)))->findAll();
     }
 
     /** The newest $limit room messages (visibility=room), oldest first: what the room page opens with. */

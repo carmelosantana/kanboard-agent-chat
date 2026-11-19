@@ -4,6 +4,7 @@ namespace Kanboard\Plugin\AgentChat\Model;
 
 use InvalidArgumentException;
 use JsonRPC\Exception\AccessDeniedException;
+use JsonRPC\Exception\ResponseException;
 use Kanboard\Core\Base;
 use RuntimeException;
 
@@ -12,7 +13,8 @@ use RuntimeException;
  * the error guard.
  *
  * JSON-RPC errors the client sees: bad params are an InvalidArgumentException (-32602, the plain
- * message in `data`), refusals an AccessDeniedException (403 Forbidden), and anything else a
+ * message in `data`), refusals an AccessDeniedException (403 Forbidden) or a ResponseException
+ * the caller built with its own code and `data`, and anything else a
  * RuntimeException with a fixed message and code -32603 (Internal error), never SQL, a path or a
  * trace. The access check runs inside guard() too, so a database error there is just as plain.
  */
@@ -45,7 +47,7 @@ abstract class RpcCall extends Base
     {
         try {
             return $call();
-        } catch (InvalidArgumentException|AccessDeniedException $e) {
+        } catch (InvalidArgumentException|AccessDeniedException|ResponseException $e) {
             throw $e;
         } catch (\Throwable $e) {
             $this->logger->error('AgentChat API call failed: '.$e->getMessage());

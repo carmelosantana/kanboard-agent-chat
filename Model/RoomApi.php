@@ -5,20 +5,23 @@ namespace Kanboard\Plugin\AgentChat\Model;
 use ChatParts\Model\Part\TextPart;
 use InvalidArgumentException;
 use JsonRPC\Exception\AccessDeniedException;
+use JsonRPC\Exception\ResponseException;
 
 /**
  * The chatSendMessage / chatRoomMessages procedures behind AgentChatRoomProcedure: agents (and
  * people) post to and read a project's room with their own API credentials.
  *
  * Both need a user session (username + password or personal token); the application token has
- * no user, so it is refused: a post needs a sender and reads run as a user. Posting needs
+ * no user, so it is refused (403 Forbidden, `data` says a user token is required): a post needs a
+ * sender and reads run as a user. Posting needs
  * AccessPolicy::canPost, reading canView; inactive users and unknown projects are refused alike.
  * The room is always the project's room; a client never names a room, sender or visibility.
  *
- * Reads return room messages only (never private ones), oldest first, with id > after. A bot
- * message is included only once it is final (done, stopped or error), so a reader gets complete
- * answers; a draft that finishes after the reader's cursor has moved past its id is not returned
- * later. Errors are mapped as RpcCall describes.
+ * Reads return room messages only (never private ones), oldest first, with id > after. A page
+ * ends just before the first unfinished bot message (submitted or streaming), so a reader gets
+ * complete answers and never skips one; it sees nothing newer until that answer is final. The
+ * wait is bounded: the run lifecycle finalises a crashed or stuck run as error within the run
+ * time limit plus a grace period. Errors are mapped as RpcCall describes.
  */
 class RoomApi extends RpcCall
 {
@@ -80,7 +83,7 @@ class RoomApi extends RpcCall
                 'sender_name' => $messages->toChatPartsMessage($row)->participant->name,
                 'text' => (string) $row['body_text'],
                 'created_at' => (int) $row['created_at'],
-            ], $messages->listFinalAfter((int) $room['id'], $after, $limit));
+            ], $messages->listSettledAfter((int) $room['id'], $after, $limit));
         }, self::READ_FAILED);
     }
 
@@ -88,7 +91,7 @@ class RoomApi extends RpcCall
     private function allowedUser(callable $allowed): int
     {
         if (! $this->userSession->isLogged()) {
-            throw new AccessDeniedException('Forbidden');
+            throw new ResponseException('Forbidden', 403, null, 'A user API token is required; the application token has no user.');
         }
         $userId = (int) $this->userSession->getId();
         if (! $allowed(new AccessPolicy($this->container), $userId)) {
