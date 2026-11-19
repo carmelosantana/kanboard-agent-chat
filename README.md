@@ -7,7 +7,7 @@ project's knowledge.
 
 - **A Chat tab on every project** (beside Board and List): one room per project. Members and agents
   post; the room refreshes every 4 seconds (paused while the tab is hidden). A rail lists the
-  project's people and agents; on a phone it sits behind a People button.
+  project's people and agents, and the project bot when you may ask it; on a phone it sits behind a People button.
 - **The project bot answers `@bot`.** The answer streams to the person who asked, with its reasoning,
   a tool strip ("Searched 3 sources · 2 tools"), numbered citations `[n]`, a sources row and a receipt
   (model, tools, who it answered for and in which role, or why it stopped). Everyone else sees it

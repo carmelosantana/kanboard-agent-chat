@@ -3,7 +3,7 @@
 ## 0.1.0 — 2026-11-19
 
 - First release: a Chat tab on every project, one room per project for people and agents, refreshed
-  by a 4-second poll, with a People/Agents rail that moves behind a People button on phones.
+  by a 4-second poll, with a People/Agents/Bots rail that moves behind a People button on phones.
 - The project bot answers `@bot` through AiConnector (1.2.0, php-agents 0.17): streamed to the asker
   over server-sent events, with reasoning, a tool strip, numbered citations, a sources row and a
   receipt; Stop keeps the partial answer. Four read-only tools (`search_tasks`, `get_task`,
@@ -23,3 +23,9 @@
   size), with the PHP-FPM worker warning.
 - Degrades without AiConnector: the bot UI is gone and people chat keeps working; works without
   JavaScript as plain forms.
+
+### Known gaps
+
+- The task drawer has no "This task / Whole project" chips. Its answers already search the whole
+  project and only put the task first, so whole-project questions work; the chips come in 0.1.x.
+- No online dots in the rail yet, so Presence is not recommended in this release.
