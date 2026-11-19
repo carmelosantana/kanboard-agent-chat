@@ -9,7 +9,8 @@ use Throwable;
 /**
  * Who a Kanboard user is in a room: an `agent` when the Agents plugin's roster lists them,
  * otherwise a `human`. Without Agents, or when its roster can't be read, everyone is a person.
- * The bot is no Kanboard user: bot() is the plugin-defined participant.
+ * The bot is no Kanboard user: bot() is the plugin-defined participant bot:project, as
+ * MessageModel renders stored bot rows.
  */
 class ParticipantResolver extends Base
 {
@@ -31,7 +32,7 @@ class ParticipantResolver extends Base
 
     public function bot(): Participant
     {
-        return new Participant('bot', null, 'project-bot');
+        return new Participant('bot', 'project', t('Project bot'));
     }
 
     private function isAgent(int $userId): bool

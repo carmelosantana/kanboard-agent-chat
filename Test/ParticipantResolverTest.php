@@ -52,6 +52,6 @@ class ParticipantResolverTest extends Base
 
     public function testBot(): void
     {
-        $this->assertSame(['kind' => 'bot', 'id' => null, 'name' => 'project-bot'], (new ParticipantResolver($this->container))->bot()->toArray());
+        $this->assertSame(['kind' => 'bot', 'id' => 'project', 'name' => 'Project bot'], (new ParticipantResolver($this->container))->bot()->toArray());
     }
 }

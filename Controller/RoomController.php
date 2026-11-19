@@ -2,7 +2,6 @@
 
 namespace Kanboard\Plugin\AgentChat\Controller;
 
-use ChatParts\Model\MessageStatus;
 use ChatParts\Model\Part\TextPart;
 use ChatParts\View\Notice;
 use InvalidArgumentException;
@@ -42,7 +41,7 @@ class RoomController extends BaseController
 
         $room = (new RoomModel($this->container))->forProject((int) $project['id']);
         $messages = new MessageModel($this->container);
-        $rows = $this->roomRows($messages->latest((int) $room['id'], self::PAGE_SIZE));
+        $rows = $messages->latest((int) $room['id'], self::PAGE_SIZE);
         $canPost = $policy->canPost($userId, (int) $project['id']);
 
         $this->registerAssets();
@@ -69,7 +68,10 @@ class RoomController extends BaseController
         $room = $this->projectRoom($projectId, $this->request->getStringParam('room'));
 
         $messages = new MessageModel($this->container);
-        $rows = $this->roomRows($messages->listAfter((int) $room['id'], $userId, max(0, $this->request->getIntegerParam('after')), self::PAGE_SIZE));
+        // Bot drafts (submitted, streaming) are included: other viewers see the bot answering, and
+        // the kit's cursor refetches a non-final bubble until it is final. Polled bubbles never
+        // carry sse-connect; only the asker's send response streams.
+        $rows = $messages->listAfter((int) $room['id'], $userId, max(0, $this->request->getIntegerParam('after')), self::PAGE_SIZE);
         if ($rows === []) {
             $this->response->status(204);
             return;
@@ -127,14 +129,6 @@ class RoomController extends BaseController
             throw new AccessForbiddenException();
         }
         return $room;
-    }
-
-    /** Leaves out bot drafts (submitted, streaming): those reach the asker through the stream. */
-    private function roomRows(array $rows): array
-    {
-        $drafts = [MessageStatus::Submitted->value, MessageStatus::Streaming->value];
-
-        return array_values(array_filter($rows, static fn (array $r): bool => ! ($r['sender_kind'] === 'bot' && in_array($r['status'], $drafts, true))));
     }
 
     private function bubbles(MessageModel $messages, array $rows): string

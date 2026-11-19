@@ -137,8 +137,8 @@ class MessageModel extends Base
      * Private messages never appear here, not even to their owner: they are read only through
      * privateThread(). $viewerId is the poller; access is checked by the caller (AccessPolicy).
      *
-     * The poll endpoint (RoomController) additionally filters out non-final bot drafts
-     * (status submitted/streaming), which reach the asker through the stream instead.
+     * Bot drafts (status submitted/streaming) are included: the poll shows other viewers the bot
+     * answering, and the client refetches a non-final message until it is final.
      */
     public function listAfter(int $roomId, int $viewerId, int $afterId, int $limit = 50): array
     {

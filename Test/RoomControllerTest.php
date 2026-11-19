@@ -124,7 +124,7 @@ class RoomControllerTest extends Base
         $this->assertSame(['status' => 204, 'body' => '', 'redirect' => null], $this->call('poll', ['project_id' => $this->projectA, 'after' => $id]));
     }
 
-    public function testPollReturnsBubblesAfterTheCursorAndSkipsBotDrafts(): void
+    public function testPollReturnsBubblesAfterTheCursorIncludingBotDrafts(): void
     {
         $room = $this->room($this->projectA);
         $first = $this->post($room, $this->member, 'first');
@@ -142,21 +142,28 @@ class RoomControllerTest extends Base
         $this->assertStringNotContainsString('data-id="'.$first.'"', $out['body']);
         $this->assertStringContainsString('data-id="'.$second.'"', $out['body']);
         $this->assertStringContainsString('&lt;b&gt;bold&lt;/b&gt;', $out['body']);
-        $this->assertStringNotContainsString('data-id="'.$draft.'"', $out['body']);
-        $this->assertStringNotContainsString('data-id="'.$submitted.'"', $out['body']);
+        // Other viewers see the bot "answering…": drafts come in their non-final state, and the
+        // kit's cursor refetches them until they are final. Only the asker streams.
+        $this->assertStringContainsString('data-id="'.$draft.'" data-state="streaming"', $out['body']);
+        $this->assertStringContainsString('data-id="'.$submitted.'" data-state="submitted"', $out['body']);
         $this->assertStringContainsString('data-id="'.$answered.'"', $out['body']);
+        $this->assertStringNotContainsString('sse-connect', $out['body']);
         $this->assertStringNotContainsString('>private<', $out['body']);
-        $this->assertSame(2, substr_count($out['body'], '<article '));
+        $this->assertSame(4, substr_count($out['body'], '<article '));
     }
 
-    public function testPollReturns204WhenOnlyBotDraftsAreNew(): void
+    public function testPollReturnsANewBotDraftWithoutAStream(): void
     {
         $room = $this->room($this->projectA);
         $id = $this->post($room, $this->member, 'q');
-        (new MessageModel($this->container))->create($room, new Participant('bot', null, 'project-bot'), [], ['status' => MessageStatus::Streaming->value]);
-        $this->loginAs($this->member);
+        $draft = (new MessageModel($this->container))->create($room, new Participant('bot', null, 'project-bot'), [], ['status' => MessageStatus::Streaming->value]);
+        $this->loginAs($this->viewer);
 
-        $this->assertSame(204, $this->call('poll', ['project_id' => $this->projectA, 'after' => $id])['status']);
+        $out = $this->call('poll', ['project_id' => $this->projectA, 'after' => $id]);
+
+        $this->assertSame(200, $out['status']);
+        $this->assertStringContainsString('data-id="'.$draft.'" data-state="streaming"', $out['body']);
+        $this->assertStringNotContainsString('sse-connect', $out['body']);
     }
 
     // ---- send -------------------------------------------------------------------------------
