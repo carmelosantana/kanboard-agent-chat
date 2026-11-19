@@ -136,6 +136,19 @@ class DegradeTest extends Base
         (new StreamController($this->container))->stream();
     }
 
+    public function testRailListsTheProjectBotUnderBotsOnlyWhileTheGateIsOpen(): void
+    {
+        $this->loginAs($this->member);
+        $rail = fn (): string => preg_match('~<aside class="cp-rail".*?</aside>~s', $this->room('show')['body'], $m) ? $m[0] : '';
+
+        $this->assertMatchesRegularExpression('~<h3 class="cp-rail__heading">Bots <span class="cp-rail__count">1</span></h3>.*Project bot~s', $rail());
+
+        $this->container[AiGate::CONNECTOR_OVERRIDE] = false;
+        $this->assertStringNotContainsString('Bots', $rail());
+        $this->assertStringNotContainsString('Project bot', $rail());
+        $this->assertStringContainsString('Mia', $rail(), 'people stay in the rail');
+    }
+
     public function testNoAgentsPluginMeansNoBadges(): void
     {
         if (! class_exists(self::AGENT_TABLE)) {

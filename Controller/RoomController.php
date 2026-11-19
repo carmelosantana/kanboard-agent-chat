@@ -56,6 +56,8 @@ class RoomController extends BaseController
         $messages = new MessageModel($this->container);
         $rows = $messages->latest((int) $room['id'], self::PAGE_SIZE);
         $canPost = $policy->canPost($userId, (int) $project['id']);
+        // Asked at request time: AiConnector may initialize after this plugin.
+        $canAsk = $policy->canAskBot($userId, (int) $project['id']);
 
         $host = new KanboardHost($this->container);
         $host->registerAssets();
@@ -66,12 +68,11 @@ class RoomController extends BaseController
             'messages' => array_map([$messages, 'toChatPartsMessage'], $rows),
             'afterId' => $rows === [] ? 0 : (int) end($rows)['id'],
             'canPost' => $canPost,
-            // Asked at request time: AiConnector may initialize after this plugin.
-            'canAsk' => $policy->canAskBot($userId, (int) $project['id']),
+            'canAsk' => $canAsk,
             'botImages' => (new ProjectSettings($this->container, (int) $project['id']))->botImages(),
             // Managers learn why there is no bot; everyone else just does not see it.
             'botUnavailable' => $policy->canManage($userId, (int) $project['id']) && ! AiGate::isReady($this->container),
-            'members' => $this->members((int) $project['id']),
+            'members' => $this->members((int) $project['id'], $canAsk),
         ]));
     }
 
@@ -233,14 +234,23 @@ class RoomController extends BaseController
         }
     }
 
-    /** @return array{people: list<array{id: string, name: string}>, agents: list<array{id: string, name: string}>} */
-    private function members(int $projectId): array
+    /**
+     * People and agents from the project roles, and the project bot under Bots when this user
+     * may ask it (the rail is where people find @bot).
+     *
+     * @return array<'people'|'agents'|'bots', list<array{id: string, name: string}>>
+     */
+    private function members(int $projectId, bool $withBot): array
     {
         $resolver = new ParticipantResolver($this->container);
         $groups = ['people' => [], 'agents' => []];
         foreach (array_keys($this->projectUserRoleModel->getAllUsers($projectId)) as $userId) {
             $p = $resolver->forUser((int) $userId);
             $groups[$p->kind === 'agent' ? 'agents' : 'people'][] = ['id' => (string) $p->id, 'name' => $p->name];
+        }
+        if ($withBot) {
+            $bot = $resolver->bot();
+            $groups['bots'] = [['id' => (string) $bot->id, 'name' => $bot->name]];
         }
         return $groups;
     }
