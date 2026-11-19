@@ -221,6 +221,25 @@ class StreamControllerTest extends Base
         $this->assertStringEndsWith(self::DONE_ONLY, $out['body']);
     }
 
+    public function testAFailureAfterTheClaimEndsTheRunAsAnErrorAndThenDone(): void
+    {
+        $turn = $this->ask($this->ana);
+        $this->loginAs($this->ana);
+        // Not a provider: building the runner throws after the run was claimed.
+        $this->container[BotRunner::PROVIDER_OVERRIDE] = 'not a provider';
+
+        $out = $this->stream($turn['sid']);
+
+        $this->assertStringEndsWith(self::DONE_ONLY, $out['body']);
+        $run = $this->runRow($turn['run_id']);
+        $this->assertSame('error', $run['status'], 'not left running for the reaper');
+        $this->assertSame(['error_code' => 'stream_failed'], json_decode($run['usage'], true));
+        $message = (new MessageModel($this->container))->getById($turn['message_id']);
+        $this->assertSame('error', $message['status']);
+        $this->assertSame('The bot could not answer.', $message['body_text']);
+        $this->assertStringNotContainsString('not a provider', $message['body_text'].$message['metadata']);
+    }
+
     public function testAClientThatWentAwayStopsTheRun(): void
     {
         $turn = $this->ask($this->ana);

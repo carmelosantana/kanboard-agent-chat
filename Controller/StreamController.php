@@ -20,7 +20,8 @@ use Kanboard\Plugin\AgentChat\Model\RunModel;
  * URL gives is an event stream that ends with `done`, refusals and failures included, because
  * htmx-ext-sse reconnects on anything else (a 204 or an error status), forever: a spent,
  * unknown or foreign sid gets `done` alone (SseWriter::refuse); a closed gate ends the claimed
- * run as an error and answers the same way; an exception is logged and closes the stream.
+ * run as an error and answers the same way; an exception is logged, ends a claimed run as an
+ * error (stream_failed) and closes the stream.
  * Kanboard's own Response is not used, so nothing buffers the frames.
  *
  * A client that goes away is a stop (stop_requested = STOPPED): the answer so far is stored as
@@ -41,6 +42,7 @@ class StreamController extends BaseController
         }
         ignore_user_abort(true);
         $userId = (int) $this->userSession->getId();
+        $runId = null;
 
         try {
             $runs = new RunModel($this->container);
@@ -72,6 +74,14 @@ class StreamController extends BaseController
             $writer->close();
         } catch (\Throwable $e) {
             $this->logger->error('AgentChat: stream failed: '.get_class($e).': '.$e->getMessage());
+            // A claimed run ends now as an error (the generic text), not after the reaper's wait.
+            if ($runId !== null) {
+                try {
+                    (new RunModel($this->container))->fail($runId, 'stream_failed');
+                } catch (\Throwable $e) {
+                    $this->logger->error('AgentChat: could not end bot run #'.$runId.': '.$e->getMessage());
+                }
+            }
             $writer->close();
         }
     }
