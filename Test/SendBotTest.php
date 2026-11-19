@@ -226,7 +226,7 @@ class SendBotTest extends Base
 
     public function testMentionTooLongForTheModelIsANoticeAndStartsNoRun(): void
     {
-        $this->container['configModel']->save(['aiconnector_default' => 'p1', \Kanboard\Plugin\AiConnector\Model\ModelCatalog::CACHE_KEY => json_encode(['p1|claude-sonnet-5-5' => ['context_window' => 4096, 'source' => 'test', 'verified_at' => time()]])]);
+        $this->container['configModel']->save(['aiconnector_default' => 'p1', \Kanboard\Plugin\AiConnector\Model\ModelCatalog::CACHE_KEY => json_encode(['p1|claude-sonnet-5-5' => ['context_window' => 2048, 'source' => 'test', 'verified_at' => time()]])]);
         $this->loginAs($this->member);
 
         $out = $this->send('@bot '.str_repeat('long words ', 700));

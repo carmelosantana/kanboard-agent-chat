@@ -22,12 +22,18 @@ use Kanboard\Plugin\AiConnector\Model\ModelCatalog;
  * The window is AiConnector's ModelCatalog::getContextWindow() for the project's profile (its
  * own fallback for a model it does not know); tokens are ModelCatalog::countTokens(). The
  * window fills in this order: instructions, tool definitions, the drawer's task, history (the
- * last 40 messages, oldest dropped first), sources (sourcesCap(): a quarter of the window, at
- * most SOURCES_CAP, held back for tool results and enforced in the run by SourceCap), the
- * new message with its images (IMAGE_TOKENS each, at most MAX_IMAGES), and REPLY_RESERVE
- * for the answer. History gives way first; the message is never trimmed: when instructions,
+ * last 40 messages, oldest dropped first), sources (held back for tool results and enforced
+ * in the run by SourceCap), the new message with its images (IMAGE_TOKENS each, at most
+ * MAX_IMAGES), and the reply reserve (replyReserve(): a quarter of the window, at most
+ * REPLY_RESERVE). The sources cap is a quarter of the window, at most SOURCES_CAP, and never
+ * more than what instructions, tools, task, message and reply reserve leave; history gets
+ * what is left after that. So for a question that fits, the segments never add up to more
+ * than the window. History gives way first; the message is never trimmed: when instructions,
  * tools, task and message leave no room for the reply reserve, the message is too long for
  * the model (`fits` is false) and the bot does not run.
+ *
+ * Within one instance the project's profile and people's names are looked up once, so a ring
+ * refresh costs a fixed handful of queries, not a few per history row.
  *
  * The task segment is what naming the drawer's task adds to the instructions.
  */
@@ -41,6 +47,10 @@ class ContextBudget extends Base
     public const MAX_IMAGES = 4;
 
     private ?ModelCatalog $catalog = null;
+    /** @var array<int, ?string> project id => AiConnector profile */
+    private array $profiles = [];
+    /** @var array<int, string> user id => display name */
+    private array $authors = [];
 
     /**
      * The ring's breakdown for a message not written yet: the draft is known by its length
@@ -83,7 +93,7 @@ class ContextBudget extends Base
      * @param ?array $task the drawer's task row
      * @param list<ToolInterface> $tools
      * @param list<MessageInterface> $history oldest first
-     * @return array{window: int, sources_cap: int, instructions: string, history: list<MessageInterface>, fits: bool, segments: list<array{key: string, label: string, tokens: int}>}
+     * @return array{window: int, sources_cap: int, reply_reserve: int, instructions: string, history: list<MessageInterface>, fits: bool, segments: list<array{key: string, label: string, tokens: int}>}
      */
     public function fit(int $projectId, int $userId, ?array $task, array $tools, array $history, int $messageTokens): array
     {
@@ -95,8 +105,9 @@ class ContextBudget extends Base
         $toolTokens = $this->tokens((string) json_encode(array_map(static fn (ToolInterface $t): array => $t->toFunctionSchema(), $tools)), $projectId);
         $fixed = $instructionTokens + $toolTokens + $taskTokens + $messageTokens;
 
-        $sourcesCap = self::sourcesCap($window);
-        $room = $window - self::REPLY_RESERVE - $sourcesCap - $fixed;
+        $reserve = self::replyReserve($window);
+        $sourcesCap = min(self::sourcesCap($window), max(0, $window - $reserve - $fixed));
+        $room = $window - $reserve - $sourcesCap - $fixed;
         $sizes = array_map(fn (MessageInterface $m): int => $this->tokens((string) $m->content(), $projectId), $history);
         while ($history !== [] && array_sum($sizes) > $room) {
             array_shift($history);
@@ -110,9 +121,10 @@ class ContextBudget extends Base
         return [
             'window' => $window,
             'sources_cap' => $sourcesCap,
+            'reply_reserve' => $reserve,
             'instructions' => $instructions,
             'history' => $history,
-            'fits' => $fixed <= $window - self::REPLY_RESERVE,
+            'fits' => $fixed <= $window - $reserve,
             'segments' => [
                 ['key' => 'instructions', 'label' => t('Instructions'), 'tokens' => $instructionTokens],
                 ['key' => 'tools', 'label' => t('Tools'), 'tokens' => $toolTokens],
@@ -120,12 +132,18 @@ class ContextBudget extends Base
                 ['key' => 'history', 'label' => t('History'), 'tokens' => array_sum($sizes)],
                 ['key' => 'sources_cap', 'label' => t('Sources (cap)'), 'tokens' => $sourcesCap],
                 ['key' => 'message', 'label' => t('Message and images'), 'tokens' => $messageTokens],
-                ['key' => 'reply_reserve', 'label' => t('Reply reserve'), 'tokens' => self::REPLY_RESERVE],
+                ['key' => 'reply_reserve', 'label' => t('Reply reserve'), 'tokens' => $reserve],
             ],
         ];
     }
 
-    /** Tool-result tokens one answer may use: a quarter of the window, at most SOURCES_CAP. */
+    /** Output tokens kept free for the answer: a quarter of the window, at most REPLY_RESERVE. */
+    public static function replyReserve(int $window): int
+    {
+        return max(0, min(self::REPLY_RESERVE, intdiv($window, 4)));
+    }
+
+    /** Tool-result tokens one answer may use at most: a quarter of the window, at most SOURCES_CAP. */
     public static function sourcesCap(int $window): int
     {
         return max(0, min(self::SOURCES_CAP, intdiv($window, 4)));
@@ -174,7 +192,7 @@ class ContextBudget extends Base
 
     public function author(int $userId): string
     {
-        return (new ParticipantResolver($this->container))->forUser($userId)->name;
+        return $this->authors[$userId] ??= (new ParticipantResolver($this->container))->forUser($userId)->name;
     }
 
     /** The asker's project role as Kanboard names it ("Project Member", a custom role, "Administrator"). */
@@ -189,7 +207,10 @@ class ContextBudget extends Base
 
     private function profile(int $projectId): ?string
     {
-        return (new ProjectSettings($this->container, $projectId))->aiProfile();
+        if (! array_key_exists($projectId, $this->profiles)) {
+            $this->profiles[$projectId] = (new ProjectSettings($this->container, $projectId))->aiProfile();
+        }
+        return $this->profiles[$projectId];
     }
 
     private function catalog(): ModelCatalog

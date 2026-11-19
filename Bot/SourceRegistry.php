@@ -50,6 +50,16 @@ final class SourceRegistry
         return $n;
     }
 
+    /** Forgets every source numbered after $n (they were never shown); numbering goes on from there. */
+    public function forgetAfter(int $n): void
+    {
+        foreach ($this->parts as $number => $part) {
+            if ($number > $n) {
+                unset($this->parts[$number], $this->numbers[$part->kind.':'.$part->ref]);
+            }
+        }
+    }
+
     /** @return list<SourcePart> in number order */
     public function all(): array
     {

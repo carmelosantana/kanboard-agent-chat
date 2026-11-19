@@ -212,10 +212,14 @@ class RoomController extends BaseController
      * The composer's context ring: a ContextMeter for the next question from the draft's
      * length (`draft_len`, 0–8 000 characters) and image count (`images`, 0–4); anything not a
      * whole number counts as 0. 204 (the ring stays as it is) for anyone who may not ask the
-     * bot here, or while the project's AI gate is closed.
+     * bot here, or while the project's AI gate is closed; 405 for anything but GET.
      */
     public function context(): void
     {
+        if ($this->request->getMethod() !== 'GET') {
+            $this->response->status(405);
+            return;
+        }
         $projectId = $this->request->getIntegerParam('project_id');
         $userId = (int) $this->userSession->getId();
         $policy = new AccessPolicy($this->container);

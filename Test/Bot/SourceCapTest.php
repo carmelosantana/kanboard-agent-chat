@@ -1,17 +1,58 @@
 <?php
 require_once dirname(__DIR__, 3).'/AiConnector/vendor/autoload.php';
+require_once dirname(__DIR__, 2).'/vendor-chatparts/autoload.php';
 
 use CarmeloSantana\PHPAgents\Contract\ToolInterface;
 use CarmeloSantana\PHPAgents\Tool\ToolResult;
 use Kanboard\Plugin\AgentChat\Bot\SourceCap;
+use Kanboard\Plugin\AgentChat\Bot\SourceRegistry;
 use PHPUnit\Framework\TestCase;
 
 class SourceCapTest extends TestCase
 {
     /** One token per 4 characters, as ModelCatalog counts for most providers. */
-    private function cap(int $cap): SourceCap
+    private function cap(int $cap, ?SourceRegistry $sources = null): SourceCap
     {
-        return new SourceCap($cap, static fn (string $text): int => (int) ceil(mb_strlen($text, 'UTF-8') / 4));
+        return new SourceCap($cap, static fn (string $text): int => (int) ceil(mb_strlen($text, 'UTF-8') / 4), $sources);
+    }
+
+    /** A tool that registers $items task sources and lists them as a tool would: {"results":[{"n":…,"title":…},…]}. */
+    private function listing(SourceRegistry $sources, int $from, int $items): ToolInterface
+    {
+        return new class($sources, $from, $items) implements ToolInterface {
+            public function __construct(private SourceRegistry $sources, private int $from, private int $items)
+            {
+            }
+
+            public function name(): string
+            {
+                return 'search_tasks';
+            }
+
+            public function description(): string
+            {
+                return 'A listing.';
+            }
+
+            public function parameters(): array
+            {
+                return [];
+            }
+
+            public function execute(array $input): ToolResult
+            {
+                $results = [];
+                for ($i = $this->from; $i < $this->from + $this->items; $i++) {
+                    $results[] = ['n' => $this->sources->register('task', (string) $i, "Task $i", "/task/$i"), 'title' => str_repeat('t', 200)];
+                }
+                return ToolResult::success(json_encode(['results' => $results]));
+            }
+
+            public function toFunctionSchema(): array
+            {
+                return ['type' => 'function', 'function' => ['name' => 'search_tasks', 'description' => 'A listing.', 'parameters' => []]];
+            }
+        };
     }
 
     private function tool(string $content): ToolInterface
@@ -91,5 +132,35 @@ class SourceCapTest extends TestCase
         $a->execute([]);
 
         $this->assertSame(SourceCap::TEXT, $b->execute([])->content, '1 token left: no room for a partial');
+    }
+
+    public function testACutResultKeepsOnlyTheSourcesTheModelSees(): void
+    {
+        $sources = new SourceRegistry();
+        $sources->register('task', '999', 'Known', '/task/999');
+        $cap = $this->cap(400, $sources);
+        [$a, $b] = $cap->wrap([$this->tool(str_repeat('a', 1000)), $this->listing($sources, 1, 10)]);
+        $a->execute([]);
+
+        $cut = json_decode($b->execute([])->content, true)['partial'];
+
+        preg_match_all('/"n":(\d+)[,}]/', $cut, $m);
+        $seen = array_map('intval', $m[1]);
+        $this->assertNotEmpty($seen);
+        $this->assertLessThan(11, max($seen), 'some items were cut off');
+        $this->assertSame(range(1, max($seen)), array_column($sources->all(), 'n'), 'the known source and the shown ones stay; the cut-off ones are forgotten');
+        $this->assertNull($sources->resolve(11));
+        $this->assertSame(max($seen) + 1, $sources->register('task', 'later', 'Later', '/task/later'), 'numbering goes on from there');
+    }
+
+    public function testAResultReplacedByTheFixedTextKeepsNoNewSources(): void
+    {
+        $sources = new SourceRegistry();
+        $cap = $this->cap(100, $sources);
+        [$a, $b] = $cap->wrap([$this->tool(str_repeat('a', 396)), $this->listing($sources, 1, 5)]);
+        $a->execute([]);
+
+        $this->assertSame(SourceCap::TEXT, $b->execute([])->content);
+        $this->assertSame([], $sources->all());
     }
 }

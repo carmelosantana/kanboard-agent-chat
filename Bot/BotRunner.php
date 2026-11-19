@@ -161,11 +161,11 @@ class BotRunner extends Base
                     $errorCode = 'too_long';
                 } else {
                     $history = $fit['history'];
-                    $sourceCap = new SourceCap($fit['sources_cap'], static fn (string $text): int => $budget->tokens($text, $projectId));
+                    $sourceCap = new SourceCap($fit['sources_cap'], static fn (string $text): int => $budget->tokens($text, $projectId), $sources);
                     $provider = $this->providerOverride ?? $this->provider((new ProjectSettings($this->container, $projectId))->aiProfile());
                     $model = $provider->getModel();
                     $limits = new LimitsSettings($this->container);
-                    $agent = new ChatAgent($provider, $fit['instructions'], $sourceCap->wrap($tools), $limits->maxIterations(), $limits->runLimits(max(1, $fit['window'] - ContextBudget::REPLY_RESERVE)), $token);
+                    $agent = new ChatAgent($provider, $fit['instructions'], $sourceCap->wrap($tools), $limits->maxIterations(), $limits->runLimits(max(1, $fit['window'] - $fit['reply_reserve'])), $token);
                     $agent->attach(new CallbackObserver(fn (string $event, mixed $data) => $this->observe($runId, $event, $data, $sink)));
                     $conversation = new Conversation();
                     foreach ($history as $message) {

@@ -58,9 +58,9 @@ class ContextEndpointTest extends Base
     }
 
     /** @return array{status: int, body: string} */
-    private function call(string $action, array $get): array
+    private function call(string $action, array $get, string $method = 'GET'): array
     {
-        $this->container['request'] = new Request($this->container, ['REQUEST_METHOD' => 'GET', 'HTTP_HX_REQUEST' => 'true'], ['project_id' => $this->project] + $get, [], [], []);
+        $this->container['request'] = new Request($this->container, ['REQUEST_METHOD' => $method, 'HTTP_HX_REQUEST' => 'true'], ['project_id' => $this->project] + $get, [], [], []);
         $out = ['status' => 0, 'body' => ''];
         $resp = $this->createMock(Response::class);
         $resp->method('html')->willReturnCallback(function ($data, $status = 200) use (&$out) {
@@ -109,6 +109,16 @@ class ContextEndpointTest extends Base
 
         $huge = $this->rows($this->call('context', ['draft_len' => '999999999', 'images' => '-3'])['body']);
         $this->assertSame(number_format((new ModelCatalog($this->container))->countTokens('Mia: '.str_repeat('x', 8000), 'p1')), $huge['message'], 'at most 8 000 characters; a negative count is 0');
+    }
+
+    public function testOnlyGet(): void
+    {
+        $this->loginAs($this->member);
+
+        $out = $this->call('context', ['draft_len' => '10'], 'POST');
+
+        $this->assertSame(405, $out['status']);
+        $this->assertSame('', $out['body']);
     }
 
     public function testViewerGetsNoRing(): void

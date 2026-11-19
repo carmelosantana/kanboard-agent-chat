@@ -15,6 +15,10 @@ use Closure;
  * little is left for any partial, and for every call after the cap is used up, the tool is not
  * run and the model gets TEXT. So the results the model gets total at most $cap tokens; the
  * only overhead past it is TEXT itself (about 13 tokens) once per call after the cap.
+ *
+ * With the run's SourceRegistry given, a cut result keeps only the new sources whose `"n":`
+ * the model still sees (items are listed in number order, so that is the first few), and a
+ * result replaced by TEXT after its tool ran keeps none, so no unseen number can be cited.
  */
 final class SourceCap
 {
@@ -24,7 +28,7 @@ final class SourceCap
     private int $used = 0;
 
     /** @param Closure(string): int $count estimated tokens of a result's content */
-    public function __construct(private readonly int $cap, private readonly Closure $count)
+    public function __construct(private readonly int $cap, private readonly Closure $count, private readonly ?SourceRegistry $sources = null)
     {
     }
 
@@ -74,6 +78,7 @@ final class SourceCap
         if ($left <= 0) {
             return ToolResult::success(self::TEXT);
         }
+        $known = $this->sources === null ? 0 : count($this->sources->all());
         $result = $tool->execute($input);
         $tokens = ($this->count)($result->content);
         if ($tokens <= $left) {
@@ -83,6 +88,10 @@ final class SourceCap
 
         $this->used = $this->cap;
         $cut = $this->cut($result->content, $left);
+        if ($this->sources !== null) {
+            preg_match_all('/"n":(\d+)[,}]/', $cut === null ? '' : (string) json_decode($cut, true)['partial'], $m);
+            $this->sources->forgetAfter(max([$known, ...array_map('intval', $m[1])]));
+        }
         return $cut === null
             ? ToolResult::success(self::TEXT)
             : new ToolResult(ToolResultStatus::Success, $cut, mimeType: 'application/json');

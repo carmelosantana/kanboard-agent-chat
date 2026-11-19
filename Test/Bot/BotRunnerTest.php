@@ -414,7 +414,7 @@ class BotRunnerTest extends Base
 
     public function testMessageTooLongForTheModelStartsNoProviderCall(): void
     {
-        $this->window(4096);
+        $this->window(2048);
         $runId = $this->ask('@bot '.str_repeat('long words ', 700));
         $provider = new FakeProvider([]);
 
@@ -425,6 +425,18 @@ class BotRunnerTest extends Base
         $this->assertSame('Your message is too long for this model.', $this->text($final));
         $this->assertSame('too_long', json_decode($this->runRow($runId)['usage'], true)['error_code']);
         $this->assertSame(['final'], $this->eventNames());
+    }
+
+    public function testAShortQuestionRunsOnASmallWindow(): void
+    {
+        $this->window(4096);
+        $runId = $this->ask('@bot hi');
+        $provider = new FakeProvider([[FakeProvider::text('Hello.')]]);
+
+        $final = $this->runBot($runId, $provider);
+
+        $this->assertSame(MessageStatus::Done, $final->status);
+        $this->assertSame('Hello.', $this->text($final));
     }
 
     public function testRunCapsInputAtTheWindowLessTheReplyReserve(): void

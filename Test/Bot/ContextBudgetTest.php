@@ -161,6 +161,75 @@ class ContextBudgetTest extends Base
         }
     }
 
+    public function testReplyReserveIsAQuarterOfTheWindowAtMost4000(): void
+    {
+        foreach ([2048 => 512, 4096 => 1024, 8192 => 2048, 16000 => 4000, 262144 => 4000] as $window => $reserve) {
+            $this->model('anthropic', 'claude-sonnet-5-5', $window);
+            $this->assertSame($reserve, $this->tokensByKey($this->budget()->breakdown($this->room, $this->ana, null, 0, 0))['reply_reserve'], "window $window");
+        }
+    }
+
+    public function testAShortQuestionFitsSmallWindows(): void
+    {
+        foreach ([4096, 8192, 262144] as $window) {
+            $this->model('anthropic', 'claude-sonnet-5-5', $window);
+            $this->assertTrue($this->budget()->questionFits($this->project, $this->ana, '@bot hi'), "window $window");
+        }
+    }
+
+    public function testTheRingNeverPassesTheWindowForAQuestionThatFits(): void
+    {
+        $history = [];
+        for ($i = 1; $i <= 39; $i++) {
+            $history[] = new UserMessage(sprintf('Bob: message %02d ', $i).str_repeat('x', 400));
+        }
+        foreach ([2048, 4096, 8192, 262144] as $window) {
+            $this->model('anthropic', 'claude-sonnet-5-5', $window);
+            foreach ([10, 500, 1000, 2000, 3000, 6000] as $message) {
+                $fit = $this->budget()->fit($this->project, $this->ana, null, $this->tools(), $history, $message);
+                $t = array_column($fit['segments'], 'tokens', 'key');
+                if (! $fit['fits']) {
+                    continue;
+                }
+                $fixed = $t['instructions'] + $t['tools'] + $t['task'] + $t['message'];
+                $this->assertLessThanOrEqual($window, array_sum($t), "window $window, message $message");
+                $this->assertLessThanOrEqual($window - $t['reply_reserve'] - $fixed, $t['sources_cap'], "the sources cap shrinks to what is left: window $window, message $message");
+                $this->assertSame($fit['sources_cap'], $t['sources_cap']);
+                $this->assertSame($fit['reply_reserve'], $t['reply_reserve']);
+            }
+        }
+
+        $this->model('anthropic', 'claude-sonnet-5-5', 8192);
+        $fit = $this->budget()->fit($this->project, $this->ana, null, $this->tools(), $history, 4000);
+        $this->assertTrue($fit['fits'], 'a long question on an 8 192 window');
+        $this->assertLessThan(2048, $fit['sources_cap'], 'gets less room for sources');
+    }
+
+    public function testPrivateRowsNeverCountInTheRoomRing(): void
+    {
+        $this->model('anthropic', 'claude-sonnet-5-5', 32768);
+        $taskId = (int) $this->container['taskCreationModel']->create(['project_id' => $this->project, 'title' => 'Fix the login page']);
+        $this->say($this->ana, str_repeat('secret drawer words ', 50), ['visibility' => 'private', 'private_to' => $this->ana, 'task_id' => $taskId]);
+
+        $this->assertSame(0, $this->tokensByKey($this->budget()->breakdown($this->room, $this->ana, null, 0, 0))['history']);
+    }
+
+    public function testABreakdownStaysUnder30Queries(): void
+    {
+        $this->model('anthropic', 'claude-sonnet-5-5', 262144);
+        for ($i = 1; $i <= 45; $i++) {
+            $this->say($i % 2 ? $this->bob : $this->ana, "message $i");
+        }
+        $this->container['memoryCache']->flush();
+        $handler = $this->container['db']->getStatementHandler();
+        $before = $handler->getNbQueries();
+
+        $t = $this->tokensByKey($this->budget()->breakdown($this->room, $this->ana, null, 100, 0));
+
+        $this->assertGreaterThan(0, $t['history']);
+        $this->assertLessThanOrEqual(30, $handler->getNbQueries() - $before, 'profile and authors are looked up once per request, not per row');
+    }
+
     public function testHistoryNeverOpensWithTheBotsTurn(): void
     {
         $this->model('anthropic', 'claude-sonnet-5-5', 200000);
