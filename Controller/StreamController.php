@@ -4,6 +4,7 @@ namespace Kanboard\Plugin\AgentChat\Controller;
 
 use ChatParts\Stream\SseWriter;
 use Kanboard\Controller\BaseController;
+use Kanboard\Core\Controller\AccessForbiddenException;
 use Kanboard\Plugin\AgentChat\Bot\BotRunner;
 use Kanboard\Plugin\AgentChat\Bot\DbCancellationToken;
 use Kanboard\Plugin\AgentChat\Bot\SseSink;
@@ -19,7 +20,8 @@ use Kanboard\Plugin\AgentChat\Model\RunModel;
  * The sid is claimed atomically (RunModel::claim): only the asker, only once. Every answer this
  * URL gives is an event stream that ends with `done`, refusals and failures included, because
  * htmx-ext-sse reconnects on anything else (a 204 or an error status), forever: a spent,
- * unknown or foreign sid gets `done` alone (SseWriter::refuse); a closed gate ends the claimed
+ * unknown or foreign sid gets `done` alone (SseWriter::refuse); a closed gate (AiConnector there
+ * but no provider ready, or the project's bot switched off) ends the claimed
  * run as an error and answers the same way; an exception is logged, ends a claimed run as an
  * error (stream_failed) and closes the stream.
  * Kanboard's own Response is not used, so nothing buffers the frames.
@@ -33,6 +35,11 @@ class StreamController extends BaseController
 
     public function stream(): void
     {
+        // Without AiConnector (absent, too old, or php-agents without RunLimits) there is no bot
+        // on this instance and no draft to reconnect from: a plain 403.
+        if (! AiGate::isInstalled($this->container)) {
+            throw new AccessForbiddenException();
+        }
         $writer = $this->writer();
         // The stream holds this request for up to the run time limit. PHP keeps the session
         // file locked until the request ends, so without this every other request of this

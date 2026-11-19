@@ -7,6 +7,7 @@ if ($canAsk) {
     $body .= new \ChatParts\View\Composer($host, $host->url('drawer_send', ['task_id' => $taskId]), [
         'placeholder' => $host->t('Ask the bot about this task'),
         'allowImages' => true,
+        'botSeesImages' => $botImages,
         'stopUrl' => $host->url('stop', ['project_id' => $task['project_id']]),
         'contextUrl' => $host->url('context', ['project_id' => $task['project_id'], 'task_id' => $taskId]),
     ]);

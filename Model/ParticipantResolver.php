@@ -16,10 +16,17 @@ class ParticipantResolver extends Base
 {
     private const AGENT_TABLE = '\Kanboard\Plugin\Agents\Model\AgentTable';
 
-    /** @param string $rosterClass the class whose presence means Agents is installed (tests name a missing one) */
-    public function __construct($container, private string $rosterClass = self::AGENT_TABLE)
+    /** A class name in the container under this key replaces AGENT_TABLE (tests name a missing one). */
+    public const ROSTER_OVERRIDE = 'agentchat.agents_roster_class';
+
+    private string $rosterClass;
+
+    /** @param ?string $rosterClass the class whose presence means Agents is installed */
+    public function __construct($container, ?string $rosterClass = null)
     {
         parent::__construct($container);
+        $this->rosterClass = $rosterClass
+            ?? ($container->offsetExists(self::ROSTER_OVERRIDE) ? (string) $container[self::ROSTER_OVERRIDE] : self::AGENT_TABLE);
     }
 
     public function forUser(int $userId): Participant

@@ -75,7 +75,7 @@ trait PostsMessages
         $isRetry = $messages->idForClientMsgId($roomId, $sender, $clientMsgId) !== null;
         [$stored, $fileParts] = $isRetry ? [[], []] : $this->storeImages($files, $roomId, $userId, $uploads);
         if ($stored === null) {
-            $this->response->html((string) new Notice(new KanboardHost($this->container), 'error', t('The images could not be stored. Nothing was sent.')), 500);
+            $this->notice(t('The images could not be stored. Nothing was sent.'), 500);
             return null;
         }
         try {
@@ -122,18 +122,23 @@ trait PostsMessages
 
     /**
      * The response to a send: without JS the answer is written now, then a redirect to
-     * $back; with htmx the stored bubble, then the bot's draft wired to its stream (or, for a
-     * retry, the existing answer without a stream), a warning, and a limit Notice with its status.
+     * back() with any warning or limit as a flash message; with htmx the stored bubble, then
+     * the bot's draft wired to its stream (or, for a retry, the existing answer without a
+     * stream), a warning, and a limit Notice with its status.
      *
      * @param ?array{run_id: int, sid: ?string, message_id: int} $turn
      */
-    private function respondToSend(int $id, ?array $turn, ?string $warning, ?string $limit, int $limitStatus, string $back): void
+    private function respondToSend(int $id, ?array $turn, ?string $warning, ?string $limit, int $limitStatus): void
     {
-        if ($this->request->getHeader('HX-Request') === '') {
+        if (! $this->isHtmx()) {
             if ($turn !== null) {
                 BotRunner::forContainer($this->container)->runToCompletion($turn['run_id']);
             }
-            $this->response->redirect($back);
+            // The warning and the limit Notice become the next page's flash message.
+            if ($warning !== null || $limit !== null) {
+                $this->flash->failure(implode(' ', array_filter([$warning, $limit])));
+            }
+            $this->response->redirect($this->back());
             return;
         }
 
@@ -197,8 +202,25 @@ trait PostsMessages
         ]);
     }
 
+    /**
+     * A refusal: an error Notice with $status for htmx (the kit swaps it in); without JS a flash
+     * message and a redirect to back(), never a bare fragment as the page.
+     */
     private function notice(string $text, int $status = 400): void
     {
+        if (! $this->isHtmx()) {
+            $this->flash->failure($text);
+            $this->response->redirect($this->back());
+            return;
+        }
         $this->response->html((string) new Notice(new KanboardHost($this->container), 'error', $text), $status);
     }
+
+    private function isHtmx(): bool
+    {
+        return $this->request->getHeader('HX-Request') !== '';
+    }
+
+    /** Where a form posted without JS goes back to: the room, or the drawer's page. */
+    abstract private function back(): string;
 }

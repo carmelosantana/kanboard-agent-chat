@@ -23,6 +23,18 @@ final class LimitsSettings
     public const MAX_CONCURRENT_INSTANCE = 'agentchat_max_concurrent_instance';
     public const QUESTIONS_PER_HOUR = 'agentchat_questions_per_hour';
 
+    /** Every limit with its label (translated where shown), in the settings form's order. */
+    public const FIELDS = [
+        self::QUESTIONS_PER_HOUR => 'Questions per person per hour',
+        self::MAX_CONCURRENT_PER_USER => 'Answers at once per person',
+        self::MAX_CONCURRENT_INSTANCE => 'Answers at once on this instance',
+        self::MAX_RUN_SECONDS => 'Time per answer (seconds)',
+        self::MAX_ITERATIONS => 'Steps per answer',
+        self::MAX_TOOL_CALLS_PER_RUN => 'Tool calls per answer',
+        self::MAX_TOOL_CALLS_PER_TURN => 'Tool calls per step',
+        self::MAX_RESPONSE_BYTES => 'Answer size (bytes)',
+    ];
+
     public function __construct(private $container)
     {
     }
@@ -66,6 +78,46 @@ final class LimitsSettings
     public function questionsPerHour(): int
     {
         return $this->int(self::QUESTIONS_PER_HOUR, 30);
+    }
+
+    /** @return array<string, int> each limit's value now, by key (as FIELDS) */
+    public function values(): array
+    {
+        return [
+            self::QUESTIONS_PER_HOUR => $this->questionsPerHour(),
+            self::MAX_CONCURRENT_PER_USER => $this->maxConcurrentPerUser(),
+            self::MAX_CONCURRENT_INSTANCE => $this->maxConcurrentInstance(),
+            self::MAX_RUN_SECONDS => (int) ceil($this->maxRunSeconds()),
+            self::MAX_ITERATIONS => $this->maxIterations(),
+            self::MAX_TOOL_CALLS_PER_RUN => $this->maxToolCallsPerRun(),
+            self::MAX_TOOL_CALLS_PER_TURN => $this->maxToolCallsPerTurn(),
+            self::MAX_RESPONSE_BYTES => $this->maxResponseBytes(),
+        ];
+    }
+
+    /**
+     * Saves every limit in $posted (key => value) when each is a whole number of 1 or more;
+     * otherwise saves nothing and returns the error per key. A missing key is an error too.
+     *
+     * @return array<string, string> errors by key, empty when saved
+     */
+    public function save(array $posted): array
+    {
+        $errors = [];
+        $values = [];
+        foreach (self::FIELDS as $key => $label) {
+            $value = $posted[$key] ?? null;
+            $value = is_string($value) ? trim($value) : '';
+            if (! ctype_digit($value) || (int) $value < 1 || strlen(ltrim($value, '0')) > 9) {
+                $errors[$key] = t('%s must be a whole number of 1 or more.', t($label));
+                continue;
+            }
+            $values[$key] = (string) (int) $value;
+        }
+        if ($errors === []) {
+            $this->container['configModel']->save($values);
+        }
+        return $errors;
     }
 
     /**

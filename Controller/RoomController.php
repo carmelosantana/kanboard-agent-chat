@@ -10,6 +10,7 @@ use Kanboard\Controller\BaseController;
 use Kanboard\Core\Controller\AccessForbiddenException;
 use Kanboard\Plugin\AgentChat\Helper\KanboardHost;
 use Kanboard\Plugin\AgentChat\Model\AccessPolicy;
+use Kanboard\Plugin\AgentChat\Model\AiGate;
 use Kanboard\Plugin\AgentChat\Model\Busy;
 use Kanboard\Plugin\AgentChat\Model\MessageModel;
 use Kanboard\Plugin\AgentChat\Model\ParticipantResolver;
@@ -67,6 +68,9 @@ class RoomController extends BaseController
             'canPost' => $canPost,
             // Asked at request time: AiConnector may initialize after this plugin.
             'canAsk' => $policy->canAskBot($userId, (int) $project['id']),
+            'botImages' => (new ProjectSettings($this->container, (int) $project['id']))->botImages(),
+            // Managers learn why there is no bot; everyone else just does not see it.
+            'botUnavailable' => $policy->canManage($userId, (int) $project['id']) && ! AiGate::isReady($this->container),
             'members' => $this->members((int) $project['id']),
         ]));
     }
@@ -139,7 +143,7 @@ class RoomController extends BaseController
         }
 
         // Without JS the composer is a plain form: the answer is written now, then back to the room.
-        $this->respondToSend($posted['id'], $turn, $posted['warning'], $limit, $limitStatus, $this->helper->url->to('RoomController', 'show', ['project_id' => $projectId, 'plugin' => 'AgentChat']));
+        $this->respondToSend($posted['id'], $turn, $posted['warning'], $limit, $limitStatus);
     }
 
     /**
@@ -207,6 +211,11 @@ class RoomController extends BaseController
         $images = min(ContextBudget::MAX_IMAGES, $this->request->getIntegerParam('images'));
         $budget = (new ContextBudget($this->container))->breakdown((int) $room['id'], $userId, $taskId === 0 ? null : $taskId, $draftLen, $images);
         $this->response->html((string) new ContextMeter(new KanboardHost($this->container), $budget['segments'], $budget['window']));
+    }
+
+    private function back(): string
+    {
+        return $this->helper->url->to('RoomController', 'show', ['project_id' => $this->request->getIntegerParam('project_id'), 'plugin' => 'AgentChat']);
     }
 
     /**

@@ -52,6 +52,7 @@ class DrawerController extends BaseController
             'task' => $task,
             'messages' => array_map([$messages, 'toChatPartsMessage'], $messages->privateThread((int) $room['id'], $userId, (int) $task['id'], self::PAGE_SIZE)),
             'canAsk' => (new AccessPolicy($this->container))->canAskBot($userId, $projectId),
+            'botImages' => (new ProjectSettings($this->container, $projectId))->botImages(),
         ];
 
         if ($this->request->getHeader('HX-Request') !== '') {
@@ -104,7 +105,7 @@ class DrawerController extends BaseController
             }
         }
 
-        $this->respondToSend($posted['id'], $turn, $posted['warning'], $limit, $limitStatus, $this->drawerUrl($taskId));
+        $this->respondToSend($posted['id'], $turn, $posted['warning'], $limit, $limitStatus);
     }
 
     public function share(): void
@@ -127,8 +128,9 @@ class DrawerController extends BaseController
             return;
         }
 
-        if ($this->request->getHeader('HX-Request') === '') {
-            $this->response->redirect($this->drawerUrl((int) $task['id']));
+        if (! $this->isHtmx()) {
+            $this->flash->success(t('The question and answer are now in the project chat.'));
+            $this->response->redirect($this->back());
             return;
         }
         $this->response->html((string) new Notice(new KanboardHost($this->container), 'info', t('The question and answer are now in the project chat.')));
@@ -151,8 +153,8 @@ class DrawerController extends BaseController
         return [$this->taskFinderModel->getDetails($taskId), $projectId, $userId];
     }
 
-    private function drawerUrl(int $taskId): string
+    private function back(): string
     {
-        return (new KanboardHost($this->container))->url('drawer', ['task_id' => $taskId]);
+        return (new KanboardHost($this->container))->url('drawer', ['task_id' => $this->request->getIntegerParam('task_id')]);
     }
 }

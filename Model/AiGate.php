@@ -13,13 +13,35 @@ use Kanboard\Plugin\AiConnector\Plugin as AiConnectorPlugin;
  *
  * Ask it at request time, not in Plugin::initialize(): RunLimits comes from AiConnector's
  * vendor autoload, which AiConnector registers in its own initialize(), and Kanboard gives no
- * plugin load order. The nullable arguments override each branch for tests.
+ * plugin load order. The nullable arguments override each branch for tests; a bool in the
+ * container under CONNECTOR_OVERRIDE stands in for "is AiConnector there" (tests of the
+ * degraded room, where its classes are loaded anyway).
+ *
+ * isInstalled() is the gate without the provider check: AiConnector, new enough, with a
+ * php-agents that has RunLimits. Without it there is no bot at all on this instance.
  */
 final class AiGate
 {
     public const MIN_CONNECTOR_VERSION = '1.2.0';
+    public const CONNECTOR_OVERRIDE = 'agentchat.ai_connector_present';
 
     public static function isReady(
+        $container,
+        ?int $phpVersionId = null,
+        ?bool $connectorPresent = null,
+        ?string $connectorVersion = null,
+        ?bool $runLimitsPresent = null
+    ): bool {
+        try {
+            return self::isInstalled($container, $phpVersionId, $connectorPresent, $connectorVersion, $runLimitsPresent)
+                && (new ProviderRegistry($container))->isReady();
+        } catch (\Throwable $e) {
+            return false;
+        }
+    }
+
+    /** AiConnector is there, new enough, on PHP 8.4+, with php-agents' RunLimits; providers aside. */
+    public static function isInstalled(
         $container,
         ?int $phpVersionId = null,
         ?bool $connectorPresent = null,
@@ -30,20 +52,25 @@ final class AiGate
             if (($phpVersionId ?? PHP_VERSION_ID) < 80400) {
                 return false;
             }
-            if (! ($connectorPresent ?? class_exists(ProviderRegistry::class))) {
+            if (! ($connectorPresent ?? self::connectorPresent($container))) {
                 return false;
             }
             $version = $connectorVersion ?? self::installedConnectorVersion($container);
             if ($version === null || version_compare($version, self::MIN_CONNECTOR_VERSION, '<')) {
                 return false;
             }
-            if (! ($runLimitsPresent ?? class_exists(\CarmeloSantana\PHPAgents\Agent\RunLimits::class))) {
-                return false;
-            }
-            return (new ProviderRegistry($container))->isReady();
+            return $runLimitsPresent ?? class_exists(\CarmeloSantana\PHPAgents\Agent\RunLimits::class);
         } catch (\Throwable $e) {
             return false;
         }
+    }
+
+    /** Whether AiConnector's classes are there (its profiles can be listed). */
+    public static function connectorPresent($container): bool
+    {
+        return $container->offsetExists(self::CONNECTOR_OVERRIDE)
+            ? (bool) $container[self::CONNECTOR_OVERRIDE]
+            : class_exists(ProviderRegistry::class);
     }
 
     /** The gate is open and the project has its bot switched on. */

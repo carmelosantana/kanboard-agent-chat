@@ -35,6 +35,12 @@ class Plugin extends Base
         $this->route->addRoute('agentchat/drawer/:task_id/send', 'DrawerController', 'send', 'AgentChat');
         $this->route->addRoute('agentchat/drawer/:task_id/share', 'DrawerController', 'share', 'AgentChat');
         $this->projectAccessMap->add('DrawerController', '*', Role::PROJECT_VIEWER);
+        // Settings: project managers for their project, the app admin for the run limits; the
+        // controller checks AccessPolicy::canManage and the app role again.
+        $this->route->addRoute('project/:project_id/chat/settings', 'SettingsController', 'project', 'AgentChat');
+        $this->route->addRoute('settings/chat', 'SettingsController', 'limits', 'AgentChat');
+        $this->projectAccessMap->add('SettingsController', ['project', 'saveProject'], Role::PROJECT_MANAGER);
+        $this->applicationAccessMap->add('SettingsController', ['limits', 'saveLimits'], Role::APP_ADMIN);
         $this->removeChatFilesWithProjects();
 
         // JSON-RPC: withObject so core wins any name clash (withCallback/withClassAndMethod would shadow core).
@@ -47,6 +53,13 @@ class Plugin extends Base
                 'agentchat_can_view' => (new AccessPolicy($this->container))->canView((int) $this->userSession->getId(), (int) $project['id']),
             ],
         ]);
+        $this->hook->on('template:project:sidebar', [
+            'template' => 'AgentChat:settings/project_sidebar',
+            'callable' => fn (array $project) => [
+                'agentchat_can_manage' => (new AccessPolicy($this->container))->canManage((int) $this->userSession->getId(), (int) $project['id']),
+            ],
+        ]);
+        $this->hook->on('template:config:sidebar', ['template' => 'AgentChat:settings/config_sidebar']);
         // "Ask the bot" on the task view, for whoever may ask the bot there now; the button also
         // loads the kit's assets on that page. The kit's CSS, JS and htmx-config meta otherwise
         // load on the chat page only (RoomController::show()).
