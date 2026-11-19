@@ -391,4 +391,84 @@ class ToolsTest extends Base
 
         $this->assertNotFound($this->tool(GetTaskTool::class, $scope)->execute(['task_id' => $id]));
     }
+
+    public function testTextTurnsLineSeparatorsIntoNewlines(): void
+    {
+        $this->assertSame("a\nb\nc", \Kanboard\Plugin\AgentChat\Bot\Tools\ReadOnlyTool::text("a\u{2028}b\u{2029}c"));
+    }
+
+    /** Text whose JSON escapes are long: quotes, backslashes, line separators, a control char next to them. */
+    private static function escapeHeavy(int $chars): string
+    {
+        return mb_substr(str_repeat("\"\\\u{2028}\x01\u{2029}", $chars), 0, $chars, 'UTF-8');
+    }
+
+    private function assertFitsCap(ToolResult $result, int $cap = 24000): array
+    {
+        $this->assertLessThanOrEqual($cap, mb_strlen($result->content, 'UTF-8'));
+        return $this->json($result); // valid JSON, marked untrusted
+    }
+
+    public function testEscapeHeavyGetTaskFitsTheCap(): void
+    {
+        $id = $this->task($this->room, str_repeat("\u{2028}", 3000), str_repeat("\u{2029}", 3000)); // ~12 000 escaped chars each
+        for ($i = 1; $i <= 60; $i++) {
+            $this->container['subtaskModel']->create(['task_id' => $id, 'title' => self::escapeHeavy(3000)]);
+        }
+        for ($i = 1; $i <= 22; $i++) {
+            $this->comment($id, self::escapeHeavy(3000));
+        }
+
+        $data = $this->assertFitsCap($this->tool(GetTaskTool::class)->execute(['task_id' => $id]));
+
+        $this->assertTrue($data['truncated']);
+        $this->assertSame(1, $data['task']['n']);
+        $this->assertStringNotContainsString("\u{2028}", $data['task']['title']);
+    }
+
+    public function testEscapeHeavySearchFitsTheCap(): void
+    {
+        $id = $this->task($this->room, str_repeat("\u{2028}", 3000));
+        for ($i = 1; $i <= 10; $i++) {
+            $this->comment($id, 'deploy '.self::escapeHeavy(3000));
+        }
+
+        $data = $this->assertFitsCap($this->tool(SearchCommentsTool::class)->execute(['query' => 'deploy']));
+
+        $this->assertTrue($data['truncated']);
+        $this->assertNotEmpty($data['results']);
+        $this->assertCount(count($data['results']), $this->sources->all());
+    }
+
+    public function testOversizedSingleSearchItemIsShortenedNotDropped(): void
+    {
+        $this->comment($this->task($this->room, 'Fix login'), 'deploy '.str_repeat('"', 2000));
+        $tool = new class ($this->scope(), $this->sources) extends SearchCommentsTool {
+            public const MAX_RESULT = 3000;
+        };
+
+        $data = $this->assertFitsCap($tool->execute(['query' => 'deploy']), 3000);
+
+        $this->assertCount(1, $data['results']);
+        $this->assertTrue($data['truncated']);
+        $this->assertSame(1, $data['results'][0]['n']);
+        $this->assertStringStartsWith('deploy "', $data['results'][0]['text']);
+        $this->assertStringEndsWith('…', $data['results'][0]['text']);
+        $this->assertSame('Fix login', $data['results'][0]['task_title']);
+    }
+
+    public function testGetTaskShortensDescriptionFirst(): void
+    {
+        $id = $this->task($this->room, 'Fix login', str_repeat('"', 2000));
+        $tool = new class ($this->scope(), $this->sources) extends GetTaskTool {
+            public const MAX_RESULT = 3000;
+        };
+
+        $data = $this->assertFitsCap($tool->execute(['task_id' => $id]), 3000);
+
+        $this->assertTrue($data['truncated']);
+        $this->assertSame('Fix login', $data['task']['title']);
+        $this->assertStringEndsWith('…', $data['task']['description']);
+        $this->assertSame(1, $data['task']['n']);
+    }
 }

@@ -64,20 +64,22 @@ class GetTaskTool extends ReadOnlyTool
             'comments_total' => $commentsTotal,
         ];
 
-        // Over the size cap, drop the oldest comments first, then subtasks from the end.
+        // Over the size cap, drop the oldest comments first, then subtasks from the end, then shorten text.
+        $source = $item['n'];
+        $item = self::unnumbered($item);
         $payload = static fn (array $task): array => ['task' => $task]
             + (count($task['subtasks']) < $subtasksTotal || count($task['comments']) < min(self::MAX_COMMENTS, $commentsTotal) ? ['truncated' => true] : []);
-        while (! $this->fits($payload(self::unnumbered($item)))) {
+        while (! $this->fits($payload($item)) && ($item['comments'] !== [] || $item['subtasks'] !== [])) {
             if ($item['comments'] !== []) {
                 array_shift($item['comments']);
-            } elseif ($item['subtasks'] !== []) {
-                array_pop($item['subtasks']);
             } else {
-                break;
+                array_pop($item['subtasks']);
             }
         }
 
-        return $this->result($payload($this->numbered($item)));
+        $final = $this->shorten($payload($item));
+        $final['task']['n'] = $this->sources->register(...$source);
+        return $this->result($final);
     }
 
     private function commentQuery(int $taskId): \PicoDb\Table

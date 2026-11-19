@@ -18,11 +18,13 @@ use Kanboard\Plugin\AgentChat\Model\KnowledgeModel;
  * found". Anything a tool body throws is logged and answered with a fixed "The lookup failed.",
  * so no exception text (SQL, paths) reaches the model.
  *
- * Results are compact JSON marked `"untrusted": true`, at most 24 000 characters: items are
- * dropped from the end until it fits, and then `"truncated": true` and the totals say so. Items
- * are numbered as sources only once they are sure to be shown. Every text field read from
- * Kanboard is plain text (never rendered HTML), cleaned of control and format characters
- * except `\n` and `\t`, and cut to 2 000 characters.
+ * Results are compact JSON marked `"untrusted": true`, never over 24 000 characters: list items
+ * are dropped from the end (never the last one), then the longest text fields are halved
+ * (descriptions first, then titles, then the rest) until it fits, and `"truncated": true` says
+ * so. Items are numbered as sources only once they are sure to be shown. Every text field read
+ * from Kanboard is plain text (never rendered HTML), cleaned of control and format characters
+ * except `\n` and `\t`, line and paragraph separators turned into `\n`, and cut to 2 000
+ * characters.
  */
 abstract class ReadOnlyTool implements ToolInterface
 {
@@ -66,31 +68,88 @@ abstract class ReadOnlyTool implements ToolInterface
     }
 
     /**
-     * A list of items, cut from the end until the JSON fits, then numbered.
+     * A list of items, cut from the end until the JSON fits (a lone item is shortened instead),
+     * then numbered.
      *
      * @param list<array<string, mixed>> $items each with 'n' => source(...)
      */
     protected function listResult(array $items): ToolResult
     {
         $total = count($items);
+        $sources = array_column($items, 'n');
+        $items = array_map(self::unnumbered(...), $items);
         $payload = static fn (array $kept): array => ['results' => $kept] + (count($kept) < $total ? ['truncated' => true, 'results_total' => $total] : []);
-        while ($items !== [] && ! $this->fits($payload(array_map(self::unnumbered(...), $items)))) {
+        while (count($items) > 1 && ! $this->fits($payload($items))) {
             array_pop($items);
         }
 
-        return $this->result($payload(array_map($this->numbered(...), $items)));
+        $final = $this->shorten($payload($items));
+        foreach ($final['results'] as $i => $item) {
+            $final['results'][$i]['n'] = $this->sources->register(...$sources[$i]);
+        }
+        return $this->result($final);
     }
 
-    /** @param array<string, mixed> $payload */
+    /** The payload as JSON; a result still over the cap (shorten() makes that unreachable) is refused, never returned. */
     protected function result(array $payload): ToolResult
     {
+        if (! $this->fits($payload)) {
+            throw new \LengthException('Tool result over '.static::MAX_RESULT.' characters.');
+        }
         return new ToolResult(ToolResultStatus::Success, $this->encode($payload), mimeType: 'application/json');
     }
 
     /** @param array<string, mixed> $payload with every item's 'n' still unnumbered */
     protected function fits(array $payload): bool
     {
-        return mb_strlen($this->encode($payload), 'UTF-8') <= self::MAX_RESULT;
+        return mb_strlen($this->encode($payload), 'UTF-8') <= static::MAX_RESULT;
+    }
+
+    /**
+     * Halves the longest text field until the payload fits, descriptions first, then titles,
+     * then any other text, and marks it truncated. Each step shortens a field of three or more
+     * characters, so it ends: at worst every field is down to two characters.
+     *
+     * @param array<string, mixed> $payload with every item's 'n' still unnumbered
+     */
+    protected function shorten(array $payload): array
+    {
+        while (! $this->fits($payload)) {
+            $path = self::longestText($payload);
+            if ($path === null) {
+                break;
+            }
+            $field = &$payload;
+            foreach ($path as $key) {
+                $field = &$field[$key];
+            }
+            $kept = mb_substr((string) preg_replace('/…$/u', '', $field), 0, intdiv(mb_strlen($field, 'UTF-8'), 2) - 1, 'UTF-8');
+            $field = $kept.'…';
+            unset($field);
+            $payload['truncated'] = true;
+        }
+        return $payload;
+    }
+
+    /** Path to the text field to shorten next: by rank (description, title, other), then longest as JSON. @return ?list<int|string> */
+    private static function longestText(array $payload): ?array
+    {
+        $best = null;
+        $bestScore = null;
+        $walk = static function (array $node, array $path) use (&$walk, &$best, &$bestScore): void {
+            foreach ($node as $key => $value) {
+                if (is_array($value)) {
+                    $walk($value, [...$path, $key]);
+                } elseif (is_string($value) && mb_strlen($value, 'UTF-8') > 2) {
+                    $score = [match ($key) { 'description' => 2, 'title' => 1, default => 0 }, strlen(json_encode($value, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE))];
+                    if ($bestScore === null || $score > $bestScore) {
+                        [$best, $bestScore] = [[...$path, $key], $score];
+                    }
+                }
+            }
+        };
+        $walk($payload, []);
+        return $best;
     }
 
     /** An item's source, numbered by numbered() once the item is sure to be shown. @return array{0: string, 1: string, 2: string, 3: string} */
@@ -105,21 +164,17 @@ abstract class ReadOnlyTool implements ToolInterface
         return ['n' => null] + $item;
     }
 
-    /** The item with its source registered: `n` is its citation number (null once the registry is full). */
-    protected function numbered(array $item): array
-    {
-        return ['n' => $this->sources->register(...$item['n'])] + $item;
-    }
-
     private function encode(array $payload): string
     {
         return json_encode(['untrusted' => true, 'note' => self::NOTE] + $payload, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR);
     }
 
-    /** Plain text safe to hand the model: valid UTF-8, no control or format characters but \n and \t, at most 2 000 characters. */
+    /** Plain text safe to hand the model: valid UTF-8, no control or format characters but \n and \t, line separators as \n, at most 2 000 characters. */
     public static function text(?string $value): string
     {
         $text = str_replace(["\r\n", "\r"], "\n", mb_scrub((string) $value, 'UTF-8'));
+        // U+2028/U+2029 would each cost a 6-character JSON escape.
+        $text = (string) preg_replace('/[\p{Zl}\p{Zp}]/u', "\n", $text);
         $text = (string) preg_replace('/[^\P{Cc}\n\t]|\p{Cf}/u', '', $text);
         if (mb_strlen($text, 'UTF-8') > self::MAX_TEXT) {
             $text = mb_substr($text, 0, self::MAX_TEXT - 1, 'UTF-8').'…';
