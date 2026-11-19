@@ -192,6 +192,19 @@ class MessageModel extends Base
         return array_reverse($rows);
     }
 
+    /** The newest $limit room messages (visibility=room) with id < $beforeId, oldest first: the bot's room history. */
+    public function roomBefore(int $roomId, int $beforeId, int $limit = 40): array
+    {
+        $rows = $this->db->table(self::TABLE)
+            ->eq('room_id', $roomId)
+            ->eq('visibility', 'room')
+            ->lt('id', $beforeId)
+            ->desc('id')
+            ->limit(max(1, min($limit, 200)))
+            ->findAll();
+        return array_reverse($rows);
+    }
+
     /** The newest $limit messages of $userId's private drawer thread on $taskId, oldest first. */
     public function privateThread(int $roomId, int $userId, int $taskId, int $limit = 40): array
     {
