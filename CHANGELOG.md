@@ -9,7 +9,8 @@
   receipt; Stop keeps the partial answer. Four read-only tools (`search_tasks`, `get_task`,
   `search_comments`, `search_knowledge`) that read as the asker, inside the room's project.
 - "Ask the bot" drawer on the task page: a private thread per person and task, answered task-first,
-  with Share to room (once, images copied).
+  with Share to room (once, images copied). Viewers ask there (text only) when the project lets
+  everyone ask.
 - Composer from the chatparts kit (vendored, hash-checked): growing box, images by button, paste or
   drop (up to 4, 5 MB each), context ring with a breakdown, Send that turns into Stop, and "The bot
   won't see images" when images stay with people only.

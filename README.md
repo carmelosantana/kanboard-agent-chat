@@ -36,7 +36,7 @@ CDN: every asset is served from Kanboard.
 ## Install
 
 Unzip `AgentChat-<version>.zip` into `plugins/AgentChat/` (the zip's single top-level folder is
-`AgentChat`), or install it from ModMenu. The tables are created on first load. Requires Kanboard
+`AgentChat`). Installing from ModMenu works once AgentChat is listed in the plugin directory. The tables are created on first load. Requires Kanboard
 `>=1.2.47` and PHP `>=8.4`, and works on SQLite, MySQL/MariaDB and Postgres 12 or later (knowledge
 search uses a generated column).
 
@@ -63,14 +63,19 @@ as members) and the app role. Inactive users get nothing.
 |---|---|---|---|---|
 | Read the room | yes | yes | yes | yes |
 | Post, attach images, `chatSendMessage` | no (no composer) | yes | yes | yes |
-| Ask the bot (`@bot`, task drawer) | only when the project allows everyone | yes, by default | yes | yes |
+| Ask the bot in the room (`@bot`) | no | yes, by default | yes | yes |
+| Ask the bot in the task drawer | only when the project allows everyone (text only, no Share to room) | yes, by default | yes | yes |
 | Project chat settings | no | no | yes | yes |
 | Chat limits (Settings) | no | no | no | yes |
 | `knowledgeUpsert`, `knowledgeDelete` | no | no | yes | yes |
 
 - **Who may ask** is per project: managers only, members and managers (default), or everyone with
-  access, viewers included. Asking also needs the right to post, and the bot must be on for the project
-  and AiConnector ready. A member outside the ask setting can still talk; `@bot` is simply not offered.
+  access, viewers included. The bot must also be on for the project and AiConnector ready. Asking in
+  the room means posting there, so `@bot` in the room stays with members and up; a viewer under
+  "everyone" asks in the task drawer, in their private thread, without images (a drawer upload from
+  them is refused and nothing is stored) and without Share to room. Under the default and "managers
+  only" settings a viewer's drawer says "The bot is not available here." A member outside the ask
+  setting can still talk; `@bot` is simply not offered.
 - **Private drawer threads** are readable only by the person who asked. Share to room copies them as
   two new room messages, with their own copies of any images.
 - **The bot's reads run as the asker**: every tool re-checks the asker's access to the room's project,
@@ -134,10 +139,13 @@ People always see them. The bot gets them only while **Send images to the bot** 
 provider refuses image input, the question is asked again once with the text alone and the answer
 says the bot could not see the images.
 
-**Memory:** one answer with four 5 MB images peaks at about 89 MB of PHP memory with php-agents'
-Anthropic provider (the images travel base64-encoded in the request body, about 26 MB). The official
-Kanboard image's `memory_limit` is 128M, which fits, but leaves little room. If you raise the image
-limits or see "Allowed memory size exhausted" in the log, raise `memory_limit` for PHP-FPM.
+**Memory: with "Send images to the bot" on (the default), raise PHP's `memory_limit` to 256M.** One
+answer with four ~5 MB images peaked at 88.9 MiB of PHP memory in a measured run with php-agents'
+Anthropic provider (the images travel base64-encoded in the request body, about 26 MB), against the
+128M default of the official Kanboard image. That fits, but with little room to spare. In that image,
+set it in a PHP ini file, for example `/etc/php84/conf.d/zz-memory.ini` with `memory_limit = 256M`,
+and restart the container. If you see "Allowed memory size exhausted" in the log, raise
+`memory_limit` for PHP-FPM.
 
 ## Streaming behind a proxy
 
@@ -167,14 +175,19 @@ location /agentchat/stream {
 Raise `proxy_read_timeout` if you raise *Time per answer*.
 
 **Traefik** streams by default. Do not put a `buffering` middleware on this route, and if a `compress`
-middleware applies, exclude event streams from it:
+middleware applies, keep event streams out of it:
 
 ```yaml
 labels:
   # kb-compress: whatever your compress middleware is called
-  - "traefik.http.middlewares.kb-compress.compress.excludedcontenttypes=text/event-stream"
+  - "traefik.http.middlewares.kb-compress.compress.excludedcontenttypes=application/grpc,text/event-stream"
   - "traefik.http.services.kanboard.loadbalancer.responseforwarding.flushinterval=100ms"
 ```
+
+`excludedcontenttypes` replaces the middleware's default exclusion list instead of adding to it, so
+the value has to carry the defaults too: copy them from the compress page of your Traefik version's
+documentation (`application/grpc` above stands for them) and add `text/event-stream`. If you would
+rather not touch the list, leave the `compress` middleware off the Kanboard router.
 
 **Cloudflare** (proxied DNS or a tunnel) passes `text/event-stream` through as it arrives. Its proxy
 timeout is 100 seconds without a response from Kanboard; the stream answers at once and its 15 s
