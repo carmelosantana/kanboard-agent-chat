@@ -17,14 +17,16 @@
 .agentchat-people { display: flex; flex-direction: column; min-height: 0; }
 .agentchat-people__rail { display: flex; flex: 1 1 auto; min-height: 0; }
 .agentchat-people__rail .cp-rail { flex: 1 1 auto; }
-/* The toggle exists for small screens only; it stays focusable there (visually hidden). */
-.agentchat-people__toggle { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip: rect(0 0 0 0); border: 0; }
+/* The toggle exists for small screens only: out of the layout and the tab order elsewhere. */
+.agentchat-people__toggle,
 .agentchat-people__button { display: none; }
 @media (max-width: 768px) {
   .agentchat-room { grid-template-columns: 1fr; height: auto; }
   .agentchat-room__main { height: 70vh; padding-right: 0; }
   .agentchat-room .cp-rail { border-left: 0; }
   .agentchat-people { order: -1; margin-bottom: 8px; }
+  /* Visually hidden but focusable; its label is the visible button. */
+  .agentchat-people__toggle { display: block; position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip: rect(0 0 0 0); border: 0; }
   .agentchat-people__button {
     display: inline-flex;
     align-items: center;

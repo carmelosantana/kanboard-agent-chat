@@ -200,7 +200,7 @@ class DrawerControllerTest extends Base
 
     public function testShareCopiesLatestPairToRoom(): void
     {
-        $this->container[BotRunner::PROVIDER_OVERRIDE] = new FakeProvider([[FakeProvider::text('First answer.')], [FakeProvider::text('The **second** answer.')]]);
+        $this->container[BotRunner::PROVIDER_OVERRIDE] = new FakeProvider([[FakeProvider::text('First answer.')], [FakeProvider::reasoning('Looking at the screenshot.'), FakeProvider::text('The **second** answer.')]]);
         $this->loginAs($this->member);
         $this->ask($this->task, 'first question');
         $this->ask($this->task, 'second question, see the screenshot', [$this->img->upload(ImageFixtures::png(), 'shot.png')]);
@@ -221,6 +221,12 @@ class DrawerControllerTest extends Base
         $this->assertSame((int) $question['id'], (int) $answer['reply_to']);
         $this->assertSame(json_decode($privateAnswer['metadata'], true), json_decode($answer['metadata'], true), 'the bot copy keeps its metadata');
         $this->assertSame($privateAnswer['status'], $answer['status']);
+        $nonText = static fn (string $parts): array => array_values(array_map(static function (array $p): array {
+            unset($p['id']);
+            return $p;
+        }, array_filter(json_decode($parts, true), static fn (array $p): bool => $p['type'] !== 'text')));
+        $this->assertContains('reasoning', array_column($nonText($privateAnswer['parts']), 'type'), 'the answer has a non-text part to compare');
+        $this->assertSame($nonText($privateAnswer['parts']), $nonText($answer['parts']), 'the bot copy keeps its other parts');
 
         // The image is a new file with its own blobs, attached to the room copy.
         $files = $this->files();
@@ -236,22 +242,8 @@ class DrawerControllerTest extends Base
         $parts = json_decode($question['parts'], true);
         $this->assertSame('f'.$copy['id'], $parts[1]['id']);
 
-        // The private thread is untouched.
+        // The private thread stays private.
         $this->assertCount(4, array_filter($this->messages(), fn ($m) => $m['visibility'] === 'private'));
-
-        // A share that cannot copy its images posts nothing.
-        $this->container['objectStorage'] = new class($this->storeDir) extends FileStorage {
-            public function put($key, &$blob)
-            {
-                throw new \Kanboard\Core\ObjectStorage\ObjectStorageException('disk full');
-            }
-        };
-        $before = count($this->messages());
-        $failed = $this->call('share', $this->task, ['csrf_token' => $this->container['token']->getCSRFToken()]);
-        $this->assertSame(422, $failed['status']);
-        $this->assertStringContainsString('cp-notice', $failed['body']);
-        $this->assertCount($before, $this->messages());
-        $this->assertCount(2, $this->files());
     }
 
     public function testButtonHiddenWhenGateClosed(): void
@@ -272,11 +264,10 @@ class DrawerControllerTest extends Base
         $this->container['configModel']->save(['aiconnector_profiles' => '[]']);
         $this->container['memoryCache']->flush();
         $this->assertStringNotContainsString('Ask the bot', $this->sidebar(), 'AiConnector is not ready');
-        try {
-            $this->ask($this->task, 'anyone there?');
-            $this->fail('the drawer send is refused while the gate is closed');
-        } catch (AccessForbiddenException) {
-        }
+        $refused = $this->ask($this->task, 'anyone there?', htmx: true);
+        $this->assertSame(403, $refused['status'], 'the drawer send is refused while the gate is closed');
+        $this->assertStringContainsString('cp-notice', $refused['body'], 'as a Notice the composer shows');
+        $this->assertStringContainsString('The bot is not available here.', $refused['body']);
         $this->assertSame([], $this->messages());
     }
 
@@ -317,5 +308,85 @@ class DrawerControllerTest extends Base
         $this->assertStringContainsString('cp-notice', $out['body']);
         $this->assertSame([$roomMessage], array_map('intval', array_column($this->messages(), 'id')), 'no draft, no run');
         $this->assertSame([], $this->container['db']->table(RunModel::TABLE)->findAll());
+    }
+
+    public function testDrawerSendIgnoresVisibilityRecipientAndTaskFromTheRequest(): void
+    {
+        $this->container[BotRunner::PROVIDER_OVERRIDE] = new FakeProvider([[FakeProvider::text('Fine.')]]);
+        $this->loginAs($this->member);
+
+        $this->call('send', $this->task, [
+            'csrf_token' => $this->container['token']->getCSRFToken(),
+            'message' => 'which thread am I in?',
+            'visibility' => 'public',
+            'private_to' => (string) $this->other,
+            'task_id' => (string) $this->otherTask,
+        ], htmx: false);
+
+        $question = $this->messages()[0];
+        $this->assertSame('which thread am I in?', $question['body_text']);
+        $this->assertSame(['private', $this->member, $this->task], [$question['visibility'], (int) $question['private_to'], (int) $question['task_id']]);
+    }
+
+    public function testShareTwiceIsRefused(): void
+    {
+        $this->container[BotRunner::PROVIDER_OVERRIDE] = new FakeProvider([[FakeProvider::text('Once.')]]);
+        $this->loginAs($this->member);
+        $this->ask($this->task, 'share me');
+        $this->assertSame(200, $this->call('share', $this->task, ['csrf_token' => $this->container['token']->getCSRFToken()])['status']);
+        $count = count($this->messages());
+
+        $again = $this->call('share', $this->task, ['csrf_token' => $this->container['token']->getCSRFToken()]);
+
+        $this->assertSame(409, $again['status']);
+        $this->assertStringContainsString('cp-notice', $again['body']);
+        $this->assertStringContainsString('Already shared', $again['body']);
+        $this->assertCount($count, $this->messages(), 'nothing posted the second time');
+        $answer = $this->messages()[1];
+        $this->assertSame('bot', $answer['sender_kind']);
+        $room = array_map('intval', array_column((new MessageModel($this->container))->listAfter($this->room(), $this->member, 0), 'id'));
+        $this->assertSame($room, json_decode($answer['metadata'], true)['shared_as'], 'the private answer records its room copies');
+    }
+
+    public function testAShareThatFailsHalfwayRemovesWhatItCopied(): void
+    {
+        $this->container[BotRunner::PROVIDER_OVERRIDE] = new FakeProvider([[FakeProvider::text('Two pictures.')]]);
+        $this->loginAs($this->member);
+        $this->ask($this->task, 'two screenshots', [$this->img->upload(ImageFixtures::png(), 'a.png'), $this->img->upload(ImageFixtures::png(), 'b.png')]);
+        $messages = count($this->messages());
+        $files = $this->files();
+        $blobs = $this->blobs();
+        $this->assertCount(4, $blobs, 'two images, two thumbnails');
+
+        // The first image copies (blob and thumbnail); the second image's blob fails.
+        $this->container['objectStorage'] = new class($this->storeDir) extends FileStorage {
+            private int $puts = 0;
+            public function put($key, &$blob)
+            {
+                if (++$this->puts > 2) {
+                    throw new \Kanboard\Core\ObjectStorage\ObjectStorageException('disk full');
+                }
+                parent::put($key, $blob);
+            }
+        };
+
+        $out = $this->call('share', $this->task, ['csrf_token' => $this->container['token']->getCSRFToken()]);
+
+        $this->assertSame(422, $out['status']);
+        $this->assertStringContainsString('cp-notice', $out['body']);
+        $this->assertCount($messages, $this->messages(), 'nothing posted');
+        $this->assertSame($files, $this->files(), 'no copied file rows left');
+        $this->assertSame($blobs, $this->blobs(), 'the first copy\'s blobs were removed');
+    }
+
+    /** @return list<string> every blob path in the store, sorted */
+    private function blobs(): array
+    {
+        $paths = [];
+        foreach (new RecursiveIteratorIterator(new RecursiveDirectoryIterator($this->storeDir, FilesystemIterator::SKIP_DOTS)) as $f) {
+            $paths[] = substr($f->getPathname(), strlen($this->storeDir));
+        }
+        sort($paths);
+        return $paths;
     }
 }

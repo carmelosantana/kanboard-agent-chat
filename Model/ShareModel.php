@@ -20,6 +20,10 @@ use Throwable;
  *
  * Part ids get a fresh prefix per share (bubble DOM ids derive from them), file parts the new
  * file's id and URLs.
+ *
+ * An answer is shared once: the private answer's metadata records the room copies
+ * (`shared_as`: [question id, answer id]), and sharing it again is refused. The check is not
+ * atomic with the copy, so two shares in the same instant could both pass.
  */
 class ShareModel extends Base
 {
@@ -30,7 +34,7 @@ class ShareModel extends Base
      * ids [question, answer].
      *
      * @return array{0: int, 1: int}
-     * @throws NothingToShare when there is no finished answer to share
+     * @throws NothingToShare when there is no finished answer to share, or it was shared already
      * @throws Throwable when a copy fails (nothing was posted)
      */
     public function share(int $roomId, int $userId, int $taskId): array
@@ -62,10 +66,11 @@ class ShareModel extends Base
                 $answerId = $messages->create($roomId, $resolver->bot(), $parts['answer'], [
                     'status' => (string) $answer['status'],
                     'reply_to' => $questionId,
-                ] + ($answer['metadata'] === null || $answer['metadata'] === '' ? [] : ['metadata' => json_decode((string) $answer['metadata'], true, 512, JSON_THROW_ON_ERROR)]));
+                ] + ($this->metadata($answer) === [] ? [] : ['metadata' => $this->metadata($answer)]));
                 if (! $files->linkToMessage($fileIds['question'] ?? [], $questionId) || ! $files->linkToMessage($fileIds['answer'] ?? [], $answerId)) {
                     throw new RuntimeException('The shared images could not be linked.');
                 }
+                $messages->update((int) $answer['id'], ['metadata' => $this->metadata($answer) + ['shared_as' => [$questionId, $answerId]]]);
                 $this->db->closeTransaction();
             } catch (Throwable $e) {
                 $this->db->cancelTransaction();
@@ -92,6 +97,9 @@ class ShareModel extends Base
         $answer = $bots === [] ? null : end($bots);
         if ($answer === null || ! in_array($answer['status'], self::FINAL, true)) {
             throw new NothingToShare(t('There is no finished answer to share yet.'));
+        }
+        if (isset($this->metadata($answer)['shared_as'])) {
+            throw new NothingToShare(t('Already shared to the room.'));
         }
         $question = $answer['reply_to'] === null ? null : $messages->getById((int) $answer['reply_to']);
         if ($question === null
@@ -126,5 +134,11 @@ class ShareModel extends Base
             $parts[] = Part::fromArray($part);
         }
         return $parts;
+    }
+
+    /** The row's metadata as an array ([] when it has none). */
+    private function metadata(array $row): array
+    {
+        return $row['metadata'] === null || $row['metadata'] === '' ? [] : (array) json_decode((string) $row['metadata'], true, 512, JSON_THROW_ON_ERROR);
     }
 }

@@ -25,11 +25,12 @@ use Kanboard\Plugin\AgentChat\Model\ShareModel;
  *
  *  - show:  the thread in the kit's Drawer (htmx), or on the task page without JS
  *  - send:  stores the question and always starts a run (no @bot needed) for someone who may
- *           ask the bot here now (AccessPolicy::canAskBot; 403 otherwise); its history is the
+ *           ask the bot here now (AccessPolicy::canAskBot; a 403 Notice otherwise); its history is the
  *           private thread only (BotRunner). Limits as in the room: 429, or 413 for a
  *           question too long for the model (the task counts), and no run starts
  *  - share: POST, copies the latest question and answer into the room (ShareModel); 409 when
- *           there is no finished answer, 422 when a copy fails, and then nothing is posted
+ *           there is no finished answer or it was already shared, 422 when a copy fails, and
+ *           then nothing is posted
  *
  * Every action first checks that the user can view the task's project and that the task is
  * that project's (AskerScope::canReadTask); otherwise, or for a missing task, 403.
@@ -68,8 +69,10 @@ class DrawerController extends BaseController
     public function send(): void
     {
         [$task, $projectId, $userId] = $this->readableTask();
+        // A Notice, not Kanboard's 403 page, so the composer shows why; nothing is stored.
         if (! (new AccessPolicy($this->container))->canAskBot($userId, $projectId)) {
-            throw new AccessForbiddenException();
+            $this->notice(t('The bot is not available here.'), 403);
+            return;
         }
         $this->checkCSRFForm();
         $runs = new RunModel($this->container);
