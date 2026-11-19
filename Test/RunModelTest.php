@@ -276,12 +276,49 @@ class RunModelTest extends Base
     {
         $run = $this->runs->start($this->draft(), $this->room, $this->users[0])['run_id'];
 
-        $this->runs->finish($run, 'done', ['total_tokens' => 7]);
+        $this->assertTrue($this->runs->finish($run, 'done', ['total_tokens' => 7]));
 
         $row = $this->row($run);
         $this->assertSame('done', $row['status']);
         $this->assertGreaterThan(0, (int) $row['finished_at']);
         $this->assertSame(['total_tokens' => 7], json_decode($row['usage'], true));
+    }
+
+    public function testGraceIsAMinutePastTheRunTimeLimit(): void
+    {
+        $this->assertSame(60, RunModel::GRACE_SECONDS, 'the longest legitimate run is the limit plus a 30 s idle wait');
+        $limit = (int) (new LimitsSettings($this->container))->maxRunSeconds();
+        [$inside, $outside] = array_map(fn (int $u): array => $this->runs->ask($this->room, $u, $this->question($u)), array_slice($this->users, 0, 2));
+        $this->setRun($inside['run_id'], ['status' => 'running', 'started_at' => time() - $limit - 31]);
+        $this->setRun($outside['run_id'], ['status' => 'running', 'started_at' => time() - $limit - 61]);
+
+        $this->assertSame(1, $this->runs->reap());
+        $this->assertSame('running', $this->row($inside['run_id'])['status'], 'a run in its last idle wait is left alone');
+        $this->assertSame('error', $this->row($outside['run_id'])['status']);
+    }
+
+    public function testFinishLeavesARunTheReaperAlreadyEnded(): void
+    {
+        $turn = $this->runs->ask($this->room, $this->users[0], $this->question($this->users[0]));
+        $this->assertTrue($this->runs->fail($turn['run_id'], 'timed_out'));
+
+        $this->assertFalse($this->runs->finish($turn['run_id'], 'done', ['total_tokens' => 9]));
+
+        $row = $this->row($turn['run_id']);
+        $this->assertSame('error', $row['status']);
+        $this->assertSame(['error_code' => 'timed_out'], json_decode($row['usage'], true));
+    }
+
+    public function testFailAndReapLeaveARunThatAlreadyFinished(): void
+    {
+        $turn = $this->runs->ask($this->room, $this->users[0], $this->question($this->users[0]));
+        $this->assertTrue($this->runs->finish($turn['run_id'], 'done', ['total_tokens' => 9]));
+        $this->setRun($turn['run_id'], ['started_at' => time() - 10_000]);
+
+        $this->assertFalse($this->runs->fail($turn['run_id'], 'stream_failed'));
+        $this->assertSame(0, $this->runs->reap());
+        $this->assertSame('done', $this->row($turn['run_id'])['status']);
+        $this->assertSame('submitted', (new MessageModel($this->container))->getById($turn['message_id'])['status'], 'the message is not rewritten');
     }
 
     public function testReaperFinalisesStaleRunsAsError(): void

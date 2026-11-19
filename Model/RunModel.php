@@ -34,7 +34,8 @@ use Kanboard\Plugin\AgentChat\Bot\DbCancellationToken;
 class RunModel extends Base
 {
     public const TABLE = 'agentchat_runs';
-    public const GRACE_SECONDS = 30;
+    /** Past the run time limit: the longest legitimate run also waits out one 30 s provider idle timeout. */
+    public const GRACE_SECONDS = 60;
     private const ACTIVE = ['pending', 'running'];
 
     /**
@@ -137,14 +138,14 @@ class RunModel extends Base
             ->findAllByColumn('id'));
     }
 
-    /** Closes the run row: its final status, the time, and the usage summary as JSON. */
-    public function finish(int $runId, string $status, array $usage): void
+    /**
+     * Closes the run row (its final status, the time, the usage summary as JSON) if it is still
+     * pending or running; false, and nothing changed, when it already ended (the reaper or a
+     * failure got there first).
+     */
+    public function finish(int $runId, string $status, array $usage): bool
     {
-        $this->db->table(self::TABLE)->eq('id', $runId)->update([
-            'status' => $status,
-            'finished_at' => time(),
-            'usage' => json_encode($usage),
-        ]);
+        return $this->closeActive($runId, $status, $usage);
     }
 
     /**
@@ -166,12 +167,7 @@ class RunModel extends Base
      */
     public function fail(int $runId, string $errorCode): bool
     {
-        $placeholders = implode(', ', array_fill(0, count(self::ACTIVE), '?'));
-        $statement = $this->db->execute(
-            'UPDATE '.self::TABLE.' SET status = ?, finished_at = ?, '.$this->db->escapeIdentifier('usage')." = ? WHERE id = ? AND status IN ($placeholders)",
-            ['error', time(), json_encode(['error_code' => $errorCode]), $runId, ...self::ACTIVE],
-        );
-        if ($statement === false || $statement->rowCount() !== 1) {
+        if (! $this->closeActive($runId, 'error', ['error_code' => $errorCode])) {
             return false;
         }
         (new MessageModel($this->container))->update((int) $this->db->table(self::TABLE)->eq('id', $runId)->findOneColumn('message_id'), [
@@ -180,6 +176,17 @@ class RunModel extends Base
             'metadata' => ['bot' => (new ParticipantResolver($this->container))->bot()->name, 'finish_reason' => 'error'],
         ]);
         return true;
+    }
+
+    /** active → $status, atomically; true only when this call changed the row. */
+    private function closeActive(int $runId, string $status, array $usage): bool
+    {
+        $placeholders = implode(', ', array_fill(0, count(self::ACTIVE), '?'));
+        $statement = $this->db->execute(
+            'UPDATE '.self::TABLE.' SET status = ?, finished_at = ?, '.$this->db->escapeIdentifier('usage')." = ? WHERE id = ? AND status IN ($placeholders)",
+            [$status, time(), json_encode($usage), $runId, ...self::ACTIVE],
+        );
+        return $statement !== false && $statement->rowCount() === 1;
     }
 
     private function runFor(int $messageId): ?int

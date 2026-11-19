@@ -207,8 +207,11 @@ class BotRunner extends Base
             $metadata['stopped_by'] = $metadata['asked_by']['name'];
         }
 
-        $messages->update((int) $draft['id'], ['parts' => $this->finalParts($runId, $text, $cited), 'status' => $status->value, 'metadata' => $metadata]);
-        (new RunModel($this->container))->finish($runId, $status->value, $metadata['usage'] + ['finish_reason' => $finishReason, 'duration_ms' => $durationMs] + ($errorCode === null ? [] : ['error_code' => $errorCode]));
+        // The run row first: when the reaper (or a failed stream) already ended the run, its
+        // error stands and the stored message is what the sink gets.
+        if ((new RunModel($this->container))->finish($runId, $status->value, $metadata['usage'] + ['finish_reason' => $finishReason, 'duration_ms' => $durationMs] + ($errorCode === null ? [] : ['error_code' => $errorCode]))) {
+            $messages->update((int) $draft['id'], ['parts' => $this->finalParts($runId, $text, $cited), 'status' => $status->value, 'metadata' => $metadata]);
+        }
 
         $final = $messages->toChatPartsMessage($messages->getById((int) $draft['id']));
         $sink->final($final);

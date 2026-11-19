@@ -510,4 +510,19 @@ class BotRunnerTest extends Base
         $this->assertSame(70.0, $limits->maxDuration, 'the run time limit plus 10 s');
         $this->assertSame(0, $limits->maxRedirects);
     }
+
+    public function testARunTheReaperEndedMeanwhileStaysEnded(): void
+    {
+        $runId = $this->ask('@bot slow?');
+        $runs = new \Kanboard\Plugin\AgentChat\Model\RunModel($this->container);
+        $provider = new FakeProvider([[FakeProvider::text('Late '), static fn () => $runs->fail($runId, 'timed_out'), FakeProvider::text('answer.')]]);
+
+        $final = $this->runBot($runId, $provider);
+
+        $this->assertSame('error', $this->runRow($runId)['status']);
+        $this->assertSame(['error_code' => 'timed_out'], json_decode($this->runRow($runId)['usage'], true));
+        $this->assertSame(MessageStatus::Error, $final->status, 'the sink gets what is stored');
+        $this->assertSame('The bot could not answer.', $this->text($final));
+        $this->assertSame(['delta', 'delta', 'final'], $this->eventNames());
+    }
 }
