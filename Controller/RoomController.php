@@ -3,8 +3,10 @@
 namespace Kanboard\Plugin\AgentChat\Controller;
 
 use ChatParts\Model\Part\TextPart;
+use ChatParts\View\ContextMeter;
 use ChatParts\View\Notice;
 use Kanboard\Plugin\AgentChat\Bot\BotRunner;
+use Kanboard\Plugin\AgentChat\Bot\ContextBudget;
 use Kanboard\Plugin\AgentChat\Bot\Mention;
 use Kanboard\Plugin\AgentChat\Bot\SseSink;
 use InvalidArgumentException;
@@ -21,7 +23,8 @@ use Kanboard\Plugin\AgentChat\Model\RoomModel;
 use Kanboard\Plugin\AgentChat\Model\RunModel;
 
 /**
- * The project chat room: the page, the 4-second poll, the send endpoint and the bot's stop.
+ * The project chat room: the page, the 4-second poll, the send endpoint, the bot's stop and
+ * the composer's context ring.
  *
  * The room is always the project's (route param project_id), looked up after the access
  * check; a client never names a room, sender, visibility or recipient. A `room` param that
@@ -31,7 +34,7 @@ use Kanboard\Plugin\AgentChat\Model\RunModel;
  * bot gate is open, also gets the bot's draft and a run: the response carries the draft wired
  * to its stream (SseSink::draftBubble), for the asker only. Without that right or gate the
  * message is just a message. Over a run limit the message is still stored and the response is
- * a Notice (429). A retry with the same client_msg_id never starts a second run: it gets the
+ * a Notice (429); so is a question too long for the project's model (413), and no run starts. A retry with the same client_msg_id never starts a second run: it gets the
  * existing answer's bubble, without a stream. Poll and send reap stale runs first.
  */
 class RoomController extends BaseController
@@ -138,11 +141,16 @@ class RoomController extends BaseController
 
         $turn = null;
         $limit = null;
+        $limitStatus = 429;
         if (Mention::ofBot($body) && $policy->canAsk($userId, $projectId) && AiGate::isOpenFor($this->container, $projectId)) {
-            try {
-                $turn = $runs->ask((int) $room['id'], $userId, $id);
-            } catch (RateLimited|Busy $e) {
-                $limit = $e->getMessage();
+            if (! (new ContextBudget($this->container))->questionFits($projectId, $userId, $body)) {
+                [$limit, $limitStatus] = [t('Your message is too long for this model.'), 413];
+            } else {
+                try {
+                    $turn = $runs->ask((int) $room['id'], $userId, $id);
+                } catch (RateLimited|Busy $e) {
+                    $limit = $e->getMessage();
+                }
             }
         }
 
@@ -164,7 +172,7 @@ class RoomController extends BaseController
             $html .= $this->bubbles($messages, [$messages->getById($turn['message_id'])]);
         }
         if ($limit !== null) {
-            $this->response->html($html.new Notice(new KanboardHost($this->container), 'warning', $limit), 429);
+            $this->response->html($html.new Notice(new KanboardHost($this->container), 'warning', $limit), $limitStatus);
             return;
         }
         $this->response->html($html);
@@ -198,6 +206,33 @@ class RoomController extends BaseController
             }
         }
         $this->response->status(200);
+    }
+
+    /**
+     * The composer's context ring: a ContextMeter for the next question from the draft's
+     * length (`draft_len`, 0–8 000 characters) and image count (`images`, 0–4); anything not a
+     * whole number counts as 0. 204 (the ring stays as it is) for anyone who may not ask the
+     * bot here, or while the project's AI gate is closed.
+     */
+    public function context(): void
+    {
+        $projectId = $this->request->getIntegerParam('project_id');
+        $userId = (int) $this->userSession->getId();
+        $policy = new AccessPolicy($this->container);
+        if (! $policy->canView($userId, $projectId)) {
+            throw new AccessForbiddenException();
+        }
+        $room = (new RoomModel($this->container))->forProject($projectId);
+        $this->assertRoomParam($room);
+        if (! $policy->canPost($userId, $projectId) || ! $policy->canAsk($userId, $projectId) || ! AiGate::isOpenFor($this->container, $projectId)) {
+            $this->response->status(204);
+            return;
+        }
+
+        $draftLen = min(MessageModel::MAX_BODY, $this->request->getIntegerParam('draft_len'));
+        $images = min(ContextBudget::MAX_IMAGES, $this->request->getIntegerParam('images'));
+        $budget = (new ContextBudget($this->container))->breakdown((int) $room['id'], $userId, null, $draftLen, $images);
+        $this->response->html((string) new ContextMeter(new KanboardHost($this->container), $budget['segments'], $budget['window']));
     }
 
     /**

@@ -23,6 +23,7 @@ class KanboardHost extends Base implements HostAdapter
         'poll' => ['RoomController', 'poll'],
         'send' => ['RoomController', 'send'],
         'stop' => ['RoomController', 'stop'],
+        'context' => ['RoomController', 'context'],
         'stream' => ['StreamController', 'stream'],
     ];
 

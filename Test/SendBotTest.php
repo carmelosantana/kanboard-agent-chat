@@ -224,6 +224,21 @@ class SendBotTest extends Base
         $this->assertSame(['@bot first?', '@bot second?'], array_values($bodies), 'the human message is still stored');
     }
 
+    public function testMentionTooLongForTheModelIsANoticeAndStartsNoRun(): void
+    {
+        $this->container['configModel']->save(['aiconnector_default' => 'p1', \Kanboard\Plugin\AiConnector\Model\ModelCatalog::CACHE_KEY => json_encode(['p1|claude-sonnet-5-5' => ['context_window' => 4096, 'source' => 'test', 'verified_at' => time()]])]);
+        $this->loginAs($this->member);
+
+        $out = $this->send('@bot '.str_repeat('long words ', 700));
+
+        $this->assertSame(413, $out['status']);
+        $this->assertStringContainsString('cp-notice', $out['body']);
+        $this->assertStringContainsString('Your message is too long for this model.', $out['body']);
+        $this->assertStringNotContainsString('sse-connect', $out['body']);
+        $this->assertSame([], $this->runs(), 'no run');
+        $this->assertCount(1, $this->messages(), 'the message is still stored');
+    }
+
     public function testWithoutJsTheAnswerIsWrittenBeforeTheRedirect(): void
     {
         $this->container[BotRunner::PROVIDER_OVERRIDE] = new FakeProvider([[FakeProvider::text('Plain answer.')]]);

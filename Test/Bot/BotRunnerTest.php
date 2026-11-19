@@ -48,6 +48,18 @@ class BotRunnerTest extends Base
         $this->container['projectUserRoleModel']->addUser($this->project, $this->asker, Role::PROJECT_MEMBER);
         $this->container['projectUserRoleModel']->addUser($this->project, $this->bob, Role::PROJECT_MEMBER);
         $this->messages = new MessageModel($this->container);
+        $this->window(200000);
+    }
+
+    /** The default AiConnector profile, its context window cached as $tokens (no discovery). */
+    private function window(int $tokens): void
+    {
+        $this->container['configModel']->save([
+            'aiconnector_profiles' => json_encode([['id' => 'p1', 'label' => 'Test', 'provider' => 'anthropic', 'model' => 'claude-sonnet-5-5']]),
+            'aiconnector_default' => 'p1',
+            \Kanboard\Plugin\AiConnector\Model\ModelCatalog::CACHE_KEY => json_encode(['p1|claude-sonnet-5-5' => ['context_window' => $tokens, 'source' => 'test', 'verified_at' => time()]]),
+        ]);
+        $this->container['memoryCache']->flush();
     }
 
     // ── fixtures ────────────────────────────────────────────────────────────
@@ -384,6 +396,7 @@ class BotRunnerTest extends Base
 
     public function testRoomHistoryKeepsTheLast40AndDropsOldestOverBudget(): void
     {
+        $this->window(16384);
         for ($i = 1; $i <= 45; $i++) {
             $this->say($this->bob, sprintf('message %02d ', $i).str_repeat('x', 600));
         }
@@ -397,6 +410,66 @@ class BotRunnerTest extends Base
         $this->assertStringContainsString('message 45 ', $sent, 'the newest history stays');
         $this->assertStringNotContainsString('message 10 ', $sent, 'over the input budget, the oldest go first');
         $this->assertStringContainsString('@bot summarise', $sent);
+    }
+
+    public function testMessageTooLongForTheModelStartsNoProviderCall(): void
+    {
+        $this->window(4096);
+        $runId = $this->ask('@bot '.str_repeat('long words ', 700));
+        $provider = new FakeProvider([]);
+
+        $final = $this->runBot($runId, $provider);
+
+        $this->assertSame([], $provider->calls, 'no provider call');
+        $this->assertSame(MessageStatus::Error, $final->status);
+        $this->assertSame('Your message is too long for this model.', $this->text($final));
+        $this->assertSame('too_long', json_decode($this->runRow($runId)['usage'], true)['error_code']);
+        $this->assertSame(['final'], $this->eventNames());
+    }
+
+    public function testRunCapsInputAtTheWindowLessTheReplyReserve(): void
+    {
+        $this->window(16384);
+        $runId = $this->ask('@bot '.str_repeat('y', 7000));
+        $provider = new FakeProvider([[FakeProvider::text('Fine.')]]);
+
+        $final = $this->runBot($runId, $provider);
+
+        $this->assertSame(MessageStatus::Done, $final->status, 'a long message that fits the window runs');
+        $this->assertStringContainsString(str_repeat('y', 7000), $provider->sentText(), 'the message is never trimmed');
+    }
+
+    public function testSourcesCapReplacesFurtherToolResults(): void
+    {
+        for ($i = 1; $i <= 10; $i++) {
+            $this->task(sprintf('Report %02d ', $i).str_repeat('z', 1990));
+        }
+        $runId = $this->ask('@bot list the reports');
+        $provider = new FakeProvider([
+            [FakeProvider::tools(FakeProvider::call('c1', 'search_tasks', ['query' => 'report']), FakeProvider::call('c2', 'search_tasks', ['query' => 'report']))],
+            [FakeProvider::tools(FakeProvider::call('c3', 'search_tasks', ['query' => 'report']))],
+            [FakeProvider::text('Ten reports.')],
+        ]);
+
+        $final = $this->runBot($runId, $provider);
+
+        $this->assertSame(MessageStatus::Done, $final->status);
+        $toolTexts = static function (array $call): array {
+            $out = [];
+            foreach ($call['messages'] as $m) {
+                if ($m instanceof \CarmeloSantana\PHPAgents\Message\ToolResultMessage) {
+                    $out[] = (string) $m->content();
+                }
+            }
+            return $out;
+        };
+        $second = $toolTexts($provider->calls[1]);
+        $this->assertCount(2, $second);
+        $this->assertStringContainsString('Report 10', $second[0], 'under the cap, results go in whole');
+        $this->assertStringContainsString('Report 10', $second[1], 'the result that crosses the cap still goes in');
+        $third = $toolTexts($provider->calls[2]);
+        $this->assertCount(3, $third);
+        $this->assertSame('Source budget reached; answer with what you have.', end($third), 'past 8 000 tokens of sources, a further result is replaced');
     }
 
     public function testDoneToolAnswerAppearsInFinal(): void

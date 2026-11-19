@@ -6,10 +6,8 @@ use CarmeloSantana\PHPAgents\Agent\CallbackObserver;
 use CarmeloSantana\PHPAgents\Agent\Output;
 use CarmeloSantana\PHPAgents\Contract\MessageInterface;
 use CarmeloSantana\PHPAgents\Contract\ProviderInterface;
-use CarmeloSantana\PHPAgents\Contract\ToolInterface;
 use CarmeloSantana\PHPAgents\Enum\AgentFinishReason;
 use CarmeloSantana\PHPAgents\Enum\ToolResultStatus;
-use CarmeloSantana\PHPAgents\Message\AssistantMessage;
 use CarmeloSantana\PHPAgents\Message\Conversation;
 use CarmeloSantana\PHPAgents\Message\UserMessage;
 use CarmeloSantana\PHPAgents\Provider\AbstractProvider;
@@ -28,11 +26,6 @@ use ChatParts\Model\Part\ToolPart;
 use ChatParts\Model\ToolState;
 use InvalidArgumentException;
 use Kanboard\Core\Base;
-use Kanboard\Core\Security\Role;
-use Kanboard\Plugin\AgentChat\Bot\Tools\GetTaskTool;
-use Kanboard\Plugin\AgentChat\Bot\Tools\SearchCommentsTool;
-use Kanboard\Plugin\AgentChat\Bot\Tools\SearchKnowledgeTool;
-use Kanboard\Plugin\AgentChat\Bot\Tools\SearchTasksTool;
 use Kanboard\Plugin\AgentChat\Model\AccessPolicy;
 use Kanboard\Plugin\AgentChat\Model\LimitsSettings;
 use Kanboard\Plugin\AgentChat\Model\MessageModel;
@@ -40,7 +33,6 @@ use Kanboard\Plugin\AgentChat\Model\ParticipantResolver;
 use Kanboard\Plugin\AgentChat\Model\ProjectSettings;
 use Kanboard\Plugin\AgentChat\Model\RoomModel;
 use Kanboard\Plugin\AgentChat\Model\RunModel;
-use Kanboard\Plugin\AiConnector\Model\ModelCatalog;
 use Kanboard\Plugin\AiConnector\Model\ProviderRegistry;
 use Pimple\Container;
 
@@ -48,10 +40,13 @@ use Pimple\Container;
  * Runs one bot answer: the run row names the bot's draft message, the room and the asker.
  *
  * Input: in a task drawer only the asker's private thread on that task, in the room only the
- * last 40 room messages (never a private one), oldest dropped first to fit the model's input
- * budget. Everyone's messages go in as user turns prefixed with their name, the bot's earlier
- * answers as assistant turns, the asker's latest message last. Every tool reads as the asker
- * (AskerScope); an asker who can no longer view the project gets no run at all.
+ * last 40 room messages (never a private one), fitted to the model's context window by
+ * ContextBudget (oldest history dropped first; a question too long for the model gets no
+ * provider call, only "Your message is too long for this model."). Everyone's messages go in
+ * as user turns prefixed with their name, the bot's earlier answers as assistant turns, the
+ * asker's latest message last. Tool results are held to ContextBudget::SOURCES_CAP (SourceCap).
+ * Every tool reads as the asker (AskerScope); an asker who can no longer view the project gets
+ * no run at all.
  *
  * Events go to the sink as they happen (text, reasoning, tool rows); then the draft is
  * rewritten as the final message (reasoning, tool rows, the answer, the cited sources) with
@@ -68,9 +63,7 @@ use Pimple\Container;
  */
 class BotRunner extends Base
 {
-    public const HISTORY_LIMIT = 40;
-    /** Output tokens kept free of input; a later context budget replaces this. */
-    private const REPLY_RESERVE = 4000;
+    public const HISTORY_LIMIT = ContextBudget::HISTORY_LIMIT;
     private const MAX_TOOL_ERROR = 200;
     public const PROVIDER_OVERRIDE = 'agentchat.bot_provider';
     public const IDLE_TIMEOUT = 30.0;
@@ -145,6 +138,7 @@ class BotRunner extends Base
         $room = (new RoomModel($this->container))->get((int) $run['room_id']) ?? [];
         $projectId = (int) ($room['project_id'] ?? 0);
         $token = new DbCancellationToken($this->container, $runId);
+        $budget = new ContextBudget($this->container);
         $sources = new SourceRegistry();
         $output = null;
         $model = '';
@@ -156,26 +150,22 @@ class BotRunner extends Base
             } elseif (! $token->isCancelled()) {
                 $taskId = $draft['visibility'] === 'private' && $draft['task_id'] ? (int) $draft['task_id'] : null;
                 $scope = new AskerScope($this->container, $askerId, $projectId, $taskId);
-                $tools = [new SearchTasksTool($scope, $sources), new GetTaskTool($scope, $sources), new SearchCommentsTool($scope, $sources), new SearchKnowledgeTool($scope, $sources)];
-                $task = $scope->taskId === null ? null : $this->taskFinderModel->getById($scope->taskId);
-                $instructions = Instructions::build(
-                    $this->projectModel->getById($projectId) ?: [],
-                    ['name' => (string) ($asker['name'] ?? ''), 'username' => (string) ($asker['username'] ?? ''), 'role' => $this->roleLabel($askerId, $projectId)],
-                    $task ?: null,
-                );
+                $tools = ChatAgent::readTools($scope, $sources);
+                $task = $scope->taskId === null ? null : ($this->taskFinderModel->getById($scope->taskId) ?: null);
 
                 [$history, $question] = $this->conversation($messages, $draft, $askerId);
-                if ($question === null) {
+                $fit = $question === null ? null : $budget->fit($projectId, $askerId, $task, $tools, $history, $budget->tokens((string) $question->content(), $projectId));
+                if ($fit === null) {
                     $errorCode = 'no_question';
+                } elseif (! $fit['fits']) {
+                    $errorCode = 'too_long';
                 } else {
-                    $profile = (new ProjectSettings($this->container, $projectId))->aiProfile();
-                    $budget = $this->inputBudget($profile);
-                    $history = $this->fit($history, $budget, $this->tokens($instructions) + $this->tokens(json_encode(array_map(static fn (ToolInterface $t) => $t->toFunctionSchema(), $tools))) + $this->tokens((string) $question->content()));
-
-                    $provider = $this->providerOverride ?? $this->provider($profile);
+                    $history = $fit['history'];
+                    $sourceCap = new SourceCap(ContextBudget::SOURCES_CAP, static fn (string $text): int => $budget->tokens($text, $projectId));
+                    $provider = $this->providerOverride ?? $this->provider((new ProjectSettings($this->container, $projectId))->aiProfile());
                     $model = $provider->getModel();
                     $limits = new LimitsSettings($this->container);
-                    $agent = new ChatAgent($provider, $instructions, $tools, $limits->maxIterations(), $limits->runLimits($budget), $token);
+                    $agent = new ChatAgent($provider, $fit['instructions'], $sourceCap->wrap($tools), $limits->maxIterations(), $limits->runLimits(max(1, $fit['window'] - ContextBudget::REPLY_RESERVE)), $token);
                     $agent->attach(new CallbackObserver(fn (string $event, mixed $data) => $this->observe($runId, $event, $data, $sink)));
                     $conversation = new Conversation();
                     foreach ($history as $message) {
@@ -201,7 +191,7 @@ class BotRunner extends Base
             'finish_reason' => $finishReason,
             'duration_ms' => $durationMs,
             'usage' => ['prompt_tokens' => $usage->promptTokens, 'completion_tokens' => $usage->completionTokens, 'total_tokens' => $usage->totalTokens],
-            'asked_by' => ['id' => (string) $askerId, 'name' => (string) (($asker['name'] ?? '') ?: ($asker['username'] ?? '')), 'role' => $this->roleLabel($askerId, $projectId)],
+            'asked_by' => ['id' => (string) $askerId, 'name' => (string) (($asker['name'] ?? '') ?: ($asker['username'] ?? '')), 'role' => $budget->roleLabel($askerId, $projectId)],
         ];
         if ($token->stopRequest() === DbCancellationToken::STOPPED_BY_ASKER && $status === MessageStatus::Stopped) {
             $metadata['stopped_by'] = $metadata['asked_by']['name'];
@@ -250,55 +240,8 @@ class BotRunner extends Base
             return [[], null];
         }
 
-        $history = [];
-        foreach ($rows as $i => $row) {
-            $text = trim((string) $row['body_text']);
-            if ($i === $question || $text === '' || ! in_array($row['status'], [MessageStatus::Done->value, MessageStatus::Stopped->value], true)) {
-                continue;
-            }
-            $history[] = match ($row['sender_kind']) {
-                'bot' => new AssistantMessage($text),
-                'human', 'agent' => new UserMessage($this->author((int) $row['sender_id']).': '.$text),
-                default => null,
-            };
-        }
-
-        return [array_values(array_filter($history)), new UserMessage($this->author($askerId).': '.$rows[$question]['body_text'])];
-    }
-
-    /**
-     * Drops the oldest history until it fits next to the fixed input; a history never opens
-     * with the bot's turn.
-     *
-     * @param list<MessageInterface> $history
-     * @return list<MessageInterface>
-     */
-    private function fit(array $history, int $budget, int $fixed): array
-    {
-        $tokens = array_map(fn (MessageInterface $m): int => $this->tokens((string) $m->content()), $history);
-        while ($history !== [] && $budget > 0 && $fixed + array_sum($tokens) > $budget) {
-            array_shift($history);
-            array_shift($tokens);
-        }
-        while ($history !== [] && $history[0] instanceof AssistantMessage) {
-            array_shift($history);
-        }
-        return $history;
-    }
-
-    /** Input tokens the model takes once the reply is reserved; 0 when unknown (no cap). */
-    private function inputBudget(?string $profile): int
-    {
-        try {
-            return class_exists(ModelCatalog::class) ? (new ModelCatalog($this->container))->getInputBudget($profile, self::REPLY_RESERVE) : 0;
-        } catch (\Throwable) {
-            return 0;
-        }
-    }
-
-    private function tokens(string $text): int
-    {
-        return (int) ceil(mb_strlen($text, 'UTF-8') / 4);
+        $budget = new ContextBudget($this->container);
+        return [$budget->history($rows, $question), new UserMessage($budget->author($askerId).': '.$rows[$question]['body_text'])];
     }
 
     private function observe(int $runId, string $event, mixed $data, RunEventSink $sink): void
@@ -372,7 +315,7 @@ class BotRunner extends Base
     {
         $failed = t('The bot could not answer.');
         if ($errorCode !== null) {
-            return [MessageStatus::Error, 'error', $failed, $errorCode];
+            return [MessageStatus::Error, 'error', $errorCode === 'too_long' ? t('Your message is too long for this model.') : $failed, $errorCode];
         }
         // The token's last read, not a new one: a stop the agent never saw ends nothing.
         if ($token->stopRequest() !== 0) {
@@ -447,20 +390,5 @@ class BotRunner extends Base
         }
         $parts[] = new TextPart("r$runId-t1", $text);
         return [...$parts, ...$sources];
-    }
-
-    private function author(int $userId): string
-    {
-        return (new ParticipantResolver($this->container))->forUser($userId)->name;
-    }
-
-    /** The asker's project role as Kanboard names it ("Project Member", a custom role, "Administrator"). */
-    private function roleLabel(int $userId, int $projectId): string
-    {
-        $role = (string) $this->projectUserRoleModel->getUserRole($projectId, $userId);
-        if ($role === '') {
-            return ($this->userModel->getById($userId)['role'] ?? '') === Role::APP_ADMIN ? t('Administrator') : '';
-        }
-        return (string) ($this->projectRoleModel->getList($projectId)[$role] ?? $role);
     }
 }

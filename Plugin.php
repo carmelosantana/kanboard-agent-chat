@@ -18,6 +18,7 @@ class Plugin extends Base
         $this->route->addRoute('agentchat/:project_id/poll', 'RoomController', 'poll', 'AgentChat');
         $this->route->addRoute('agentchat/:project_id/send', 'RoomController', 'send', 'AgentChat');
         $this->route->addRoute('agentchat/:project_id/stop', 'RoomController', 'stop', 'AgentChat');
+        $this->route->addRoute('agentchat/:project_id/context', 'RoomController', 'context', 'AgentChat');
         // No project_id: the single-use sid names the run, and only its asker can claim it.
         $this->route->addRoute('agentchat/stream', 'StreamController', 'stream', 'AgentChat');
         // Core's middleware asks for a project role first; RoomController applies AccessPolicy on top.
