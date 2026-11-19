@@ -516,6 +516,8 @@ a.cp-cite:hover { background: var(--cp-accent); color: var(--cp-on-accent); }
 
 .cp-thumbs { display: flex; flex-wrap: wrap; gap: 8px; }
 .cp-thumbs:not(:empty) { margin: 2px 0 8px; }
+.cp-thumbs__hint { margin: -4px 0 8px; color: var(--cp-muted); font-size: 12px; }
+.cp-thumbs:empty + .cp-thumbs__hint { display: none; }
 
 .cp-thumb {
   position: relative;

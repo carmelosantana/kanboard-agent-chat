@@ -23,10 +23,11 @@ final class Composer extends Component
     private const MAX_LENGTH = 8000;
 
     /**
-     * @param array{placeholder?: string, room?: string, allowImages?: bool, canAsk?: bool, contextUrl?: string, stopUrl?: string} $opts
+     * @param array{placeholder?: string, room?: string, allowImages?: bool, botSeesImages?: bool, canAsk?: bool, contextUrl?: string, stopUrl?: string} $opts
      *   `room` is posted as a hidden field; `canAsk` adds the @bot hint to the default
-     *   placeholder; without `allowImages` there is no attach control or file input; without a
-     *   safe `contextUrl` there is no ring
+     *   placeholder; without `allowImages` there is no attach control or file input;
+     *   `botSeesImages: false` adds "The bot won't see images" under the thumbnails (shown
+     *   while there are any); without a safe `contextUrl` there is no ring
      */
     public function __construct(HostAdapter $host, private readonly string $action, private readonly array $opts = [])
     {
@@ -43,7 +44,7 @@ final class Composer extends Component
             . $this->tag('input', ['type' => 'hidden', 'name' => 'client_msg_id', 'value' => bin2hex(random_bytes(16))])
             . ($room === '' ? '' : $this->tag('input', ['type' => 'hidden', 'name' => 'room', 'value' => $room]));
 
-        $box = ($images ? $this->tag('div', ['id' => 'cp-thumbs', 'class' => 'cp-thumbs']) : '')
+        $box = ($images ? $this->tag('div', ['id' => 'cp-thumbs', 'class' => 'cp-thumbs']) . $this->imagesHint() : '')
             . $this->tag('label', ['class' => 'cp-sr', 'for' => 'cp-message'], $this->e($this->host->t('Message')))
             . $this->tag('textarea', ['id' => 'cp-message', 'class' => 'cp-box__input', 'name' => 'message', 'rows' => '1', 'maxlength' => (string) self::MAX_LENGTH, 'required' => '', 'placeholder' => $this->placeholder()])
             . ($images ? $this->tag('input', ['type' => 'file', 'id' => 'cp-images', 'name' => 'images[]', 'accept' => self::IMAGE_TYPES, 'multiple' => '', 'hidden' => '']) : '');
@@ -87,6 +88,14 @@ final class Composer extends Component
                 + ['aria-controls' => 'cp-context-pop', 'aria-expanded' => 'false'],
             new Icon($this->host, 'gauge') . $this->tag('span', ['class' => 'cp-sr'], $this->e($this->host->t('Context used'))),
         ) . $this->tag('div', ['id' => 'cp-context-pop', 'class' => 'cp-context__pop', 'hidden' => '']);
+    }
+
+    /** People still see the images; only the bot does not, so the hint shows while thumbnails do (CSS). */
+    private function imagesHint(): string
+    {
+        return ($this->opts['botSeesImages'] ?? true) === false
+            ? $this->tag('p', ['class' => 'cp-thumbs__hint'], $this->e($this->host->t("The bot won't see images")))
+            : '';
     }
 
     private function placeholder(): string
