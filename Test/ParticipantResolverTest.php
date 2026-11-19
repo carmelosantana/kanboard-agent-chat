@@ -1,5 +1,6 @@
 <?php
 require_once 'tests/units/Base.php';
+require_once __DIR__.'/AgentsRosterFixture.php';
 
 use KanboardTests\units\Base;
 use Kanboard\Plugin\AgentChat\Model\ParticipantResolver;
@@ -16,9 +17,7 @@ class ParticipantResolverTest extends Base
 
     private function agentsTable(): void
     {
-        $this->container['db']->getConnection()->exec(
-            'CREATE TABLE IF NOT EXISTS agents (id INTEGER PRIMARY KEY, owner_user_id INTEGER NOT NULL, agent_user_id INTEGER NOT NULL UNIQUE, kind VARCHAR(20) NOT NULL, created_at INTEGER NOT NULL)'
-        );
+        AgentsRosterFixture::create($this->container['db']->getConnection());
     }
 
     public function testAgentRosterUserIsAgent(): void

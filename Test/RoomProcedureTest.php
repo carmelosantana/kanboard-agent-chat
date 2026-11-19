@@ -1,5 +1,6 @@
 <?php
 require_once 'tests/units/Base.php';
+require_once __DIR__.'/AgentsRosterFixture.php';
 
 use ChatParts\Model\MessageStatus;
 use ChatParts\Model\Part\TextPart;
@@ -197,9 +198,7 @@ class RoomProcedureTest extends Base
         if (! class_exists(self::AGENT_TABLE)) {
             $this->markTestSkipped('Agents is not installed');
         }
-        $this->container['db']->getConnection()->exec(
-            'CREATE TABLE IF NOT EXISTS agents (id INTEGER PRIMARY KEY, owner_user_id INTEGER NOT NULL, agent_user_id INTEGER NOT NULL UNIQUE, kind VARCHAR(20) NOT NULL, created_at INTEGER NOT NULL)'
-        );
+        AgentsRosterFixture::create($this->container['db']->getConnection());
         $agent = (int) $this->container['userModel']->create(['username' => 'mia-claude']);
         $this->container['projectUserRoleModel']->addUser($this->project, $agent, Role::PROJECT_MEMBER);
         $class = self::AGENT_TABLE;
@@ -246,7 +245,15 @@ class RoomProcedureTest extends Base
     public function testSendStorageFailureIsAGenericInternalError(): void
     {
         $this->actAs($this->member);
-        $this->container['db']->getConnection()->exec('DROP TABLE agentchat_messages'.(DB_DRIVER === 'postgres' ? ' CASCADE' : ''));
+        $pdo = $this->container['db']->getConnection();
+        // Other AgentChat tables reference messages: MySQL needs its key checks off to drop it.
+        if (DB_DRIVER === 'mysql') {
+            $pdo->exec('SET FOREIGN_KEY_CHECKS = 0');
+        }
+        $pdo->exec('DROP TABLE agentchat_messages'.(DB_DRIVER === 'postgres' ? ' CASCADE' : ''));
+        if (DB_DRIVER === 'mysql') {
+            $pdo->exec('SET FOREIGN_KEY_CHECKS = 1');
+        }
         $this->assertInternalError(fn () => $this->rpc()->chatSendMessage($this->project, 'hi'), 'The chat could not save this message.');
         $this->assertInternalError(fn () => $this->rpc()->chatRoomMessages($this->project), 'The chat could not be read.');
     }

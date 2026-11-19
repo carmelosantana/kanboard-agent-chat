@@ -1,5 +1,6 @@
 <?php
 require_once 'tests/units/Base.php';
+require_once __DIR__.'/AgentsRosterFixture.php';
 require_once __DIR__.'/Bot/FakeProvider.php';
 
 use ChatParts\Model\Part\TextPart;
@@ -154,9 +155,7 @@ class DegradeTest extends Base
         if (! class_exists(self::AGENT_TABLE)) {
             $this->markTestSkipped('Agents is not installed');
         }
-        $this->container['db']->getConnection()->exec(
-            'CREATE TABLE IF NOT EXISTS agents (id INTEGER PRIMARY KEY, owner_user_id INTEGER NOT NULL, agent_user_id INTEGER NOT NULL UNIQUE, kind VARCHAR(20) NOT NULL, created_at INTEGER NOT NULL)'
-        );
+        AgentsRosterFixture::create($this->container['db']->getConnection());
         $agent = $this->user('mia-claude', 'mia-claude', Role::PROJECT_MEMBER);
         $class = self::AGENT_TABLE;
         (new $class($this->container))->adopt($this->member, $agent, 'claude');
