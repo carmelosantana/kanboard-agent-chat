@@ -12,6 +12,8 @@ use CarmeloSantana\PHPAgents\Enum\ToolResultStatus;
 use CarmeloSantana\PHPAgents\Message\AssistantMessage;
 use CarmeloSantana\PHPAgents\Message\Conversation;
 use CarmeloSantana\PHPAgents\Message\UserMessage;
+use CarmeloSantana\PHPAgents\Provider\AbstractProvider;
+use CarmeloSantana\PHPAgents\Provider\RequestLimits;
 use CarmeloSantana\PHPAgents\Provider\Usage;
 use CarmeloSantana\PHPAgents\Tool\DoneTool;
 use CarmeloSantana\PHPAgents\Tool\ToolCall;
@@ -37,6 +39,7 @@ use Kanboard\Plugin\AgentChat\Model\MessageModel;
 use Kanboard\Plugin\AgentChat\Model\ParticipantResolver;
 use Kanboard\Plugin\AgentChat\Model\ProjectSettings;
 use Kanboard\Plugin\AgentChat\Model\RoomModel;
+use Kanboard\Plugin\AgentChat\Model\RunModel;
 use Kanboard\Plugin\AiConnector\Model\ModelCatalog;
 use Kanboard\Plugin\AiConnector\Model\ProviderRegistry;
 use Pimple\Container;
@@ -56,6 +59,12 @@ use Pimple\Container;
  * markers that match no retrieved source are dropped. On a stop or a run limit the text
  * streamed so far is kept; on any failure the message says only that the bot could not
  * answer, and the real error goes to the log, never to the message or the run row.
+ *
+ * Callers claim the run first (RunModel::claim for a stream; runToCompletion claims by id), so
+ * a run is answered once. The provider is AiConnector's for the project's profile, with its
+ * HTTP requests held to IDLE_TIMEOUT between chunks and the run time limit plus
+ * PROVIDER_SLACK_SECONDS in all; a provider in the container under PROVIDER_OVERRIDE replaces
+ * it (tests).
  */
 class BotRunner extends Base
 {
@@ -63,6 +72,9 @@ class BotRunner extends Base
     /** Output tokens kept free of input; a later context budget replaces this. */
     private const REPLY_RESERVE = 4000;
     private const MAX_TOOL_ERROR = 200;
+    public const PROVIDER_OVERRIDE = 'agentchat.bot_provider';
+    public const IDLE_TIMEOUT = 30.0;
+    public const PROVIDER_SLACK_SECONDS = 10.0;
 
     private string $streamed = '';
     private string $reasoning = '';
@@ -77,11 +89,38 @@ class BotRunner extends Base
         parent::__construct($container);
     }
 
-    /** Runs without a live stream, keeping the draft current in the store. */
+    /** A runner with the container's provider override, if any. */
+    public static function forContainer(Container $container): self
+    {
+        return new self($container, $container->offsetExists(self::PROVIDER_OVERRIDE) ? $container[self::PROVIDER_OVERRIDE] : null);
+    }
+
+    /**
+     * Claims the pending run and answers it without a live stream, keeping the draft current
+     * in the store. A run that is not pending (claimed elsewhere, finished) is not run again:
+     * its message is returned as stored.
+     */
     public function runToCompletion(int $runId): Message
     {
         $run = $this->runRow($runId);
+        if (! (new RunModel($this->container))->claimById($runId)) {
+            $messages = new MessageModel($this->container);
+            return $messages->toChatPartsMessage($messages->getById((int) $run['message_id']) ?? throw new InvalidArgumentException("Run #$runId has no message."));
+        }
         return $this->run($runId, new StoreSink($this->container, (int) $run['message_id'], $runId));
+    }
+
+    /** The project's provider, its requests bounded by the run time limit. */
+    public function provider(?string $profile): ProviderInterface
+    {
+        $provider = (new ProviderRegistry($this->container))->buildProvider($profile);
+        if ($provider instanceof AbstractProvider) {
+            $provider = $provider->withRequestLimits(new RequestLimits(
+                idleTimeout: self::IDLE_TIMEOUT,
+                maxDuration: (new LimitsSettings($this->container))->maxRunSeconds() + self::PROVIDER_SLACK_SECONDS,
+            ));
+        }
+        return $provider;
     }
 
     public function run(int $runId, RunEventSink $sink): Message
@@ -133,7 +172,7 @@ class BotRunner extends Base
                     $budget = $this->inputBudget($profile);
                     $history = $this->fit($history, $budget, $this->tokens($instructions) + $this->tokens(json_encode(array_map(static fn (ToolInterface $t) => $t->toFunctionSchema(), $tools))) + $this->tokens((string) $question->content()));
 
-                    $provider = $this->providerOverride ?? (new ProviderRegistry($this->container))->buildProvider($profile);
+                    $provider = $this->providerOverride ?? $this->provider($profile);
                     $model = $provider->getModel();
                     $limits = new LimitsSettings($this->container);
                     $agent = new ChatAgent($provider, $instructions, $tools, $limits->maxIterations(), $limits->runLimits($budget), $token);
@@ -169,11 +208,7 @@ class BotRunner extends Base
         }
 
         $messages->update((int) $draft['id'], ['parts' => $this->finalParts($runId, $text, $cited), 'status' => $status->value, 'metadata' => $metadata]);
-        $this->db->table('agentchat_runs')->eq('id', $runId)->update([
-            'status' => $status->value,
-            'finished_at' => time(),
-            'usage' => json_encode($metadata['usage'] + ['finish_reason' => $finishReason, 'duration_ms' => $durationMs] + ($errorCode === null ? [] : ['error_code' => $errorCode])),
-        ]);
+        (new RunModel($this->container))->finish($runId, $status->value, $metadata['usage'] + ['finish_reason' => $finishReason, 'duration_ms' => $durationMs] + ($errorCode === null ? [] : ['error_code' => $errorCode]));
 
         $final = $messages->toChatPartsMessage($messages->getById((int) $draft['id']));
         $sink->final($final);

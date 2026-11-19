@@ -46,6 +46,12 @@ final class AiGate
         }
     }
 
+    /** The gate is open and the project has its bot switched on. */
+    public static function isOpenFor($container, int $projectId): bool
+    {
+        return (new ProjectSettings($container, $projectId))->botEnabled() && self::isReady($container);
+    }
+
     private static function installedConnectorVersion($container): ?string
     {
         return class_exists(AiConnectorPlugin::class)

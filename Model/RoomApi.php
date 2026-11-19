@@ -6,6 +6,8 @@ use ChatParts\Model\Part\TextPart;
 use InvalidArgumentException;
 use JsonRPC\Exception\AccessDeniedException;
 use JsonRPC\Exception\ResponseException;
+use Kanboard\Plugin\AgentChat\Bot\BotRunner;
+use Kanboard\Plugin\AgentChat\Bot\Mention;
 
 /**
  * The chatSendMessage / chatRoomMessages procedures behind AgentChatRoomProcedure: agents (and
@@ -32,10 +34,15 @@ class RoomApi extends RpcCall
 
     /**
      * Stores $body as one text part from the token's user and returns its id; a client_msg_id
-     * this user already used in the room returns that message's id. A body mentioning @bot is
-     * stored like any other: the non-streamed bot run for it is wired here by Task 16.
+     * this user already used in the room returns that message's id.
      *
-     * @return array{message_id: int}
+     * A body mentioning @bot from a user who may ask, while the project's bot gate is open, is
+     * answered within this request (no stream; up to the run time limit) and bot_message_id
+     * names the answer, whatever its status. Over a run limit the message is still stored,
+     * bot_message_id is null and bot_error says why. Without the right or the gate the
+     * result is the message id alone.
+     *
+     * @return array{message_id: int, bot_message_id?: ?int, bot_error?: string}
      */
     public function send(mixed $projectId, mixed $body, mixed $clientMsgId): array
     {
@@ -57,7 +64,17 @@ class RoomApi extends RpcCall
                 [new TextPart('t'.bin2hex(random_bytes(8)), $body)],
                 $clientMsgId === null || $clientMsgId === '' ? [] : ['client_msg_id' => $clientMsgId],
             );
-            return ['message_id' => $id];
+            if (! Mention::ofBot($body) || ! (new AccessPolicy($this->container))->canAsk($userId, $projectId) || ! AiGate::isOpenFor($this->container, $projectId)) {
+                return ['message_id' => $id];
+            }
+            try {
+                $turn = (new RunModel($this->container))->ask((int) $room['id'], $userId);
+            } catch (RateLimited|Busy $e) {
+                return ['message_id' => $id, 'bot_message_id' => null, 'bot_error' => $e->getMessage()];
+            }
+            @set_time_limit((int) ceil((new LimitsSettings($this->container))->maxRunSeconds()) + RunModel::GRACE_SECONDS);
+            BotRunner::forContainer($this->container)->runToCompletion($turn['run_id']);
+            return ['message_id' => $id, 'bot_message_id' => $turn['message_id']];
         }, self::SEND_FAILED);
     }
 

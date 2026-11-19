@@ -481,4 +481,33 @@ class BotRunnerTest extends Base
         $this->assertSame('done', $this->messages->getById($draftId)['status']);
         $this->assertSame('Hello there', $this->messages->getById($draftId)['body_text']);
     }
+
+    public function testRunToCompletionLeavesARunAlreadyClaimed(): void
+    {
+        $runId = $this->ask('@bot once?');
+        $this->assertTrue((new \Kanboard\Plugin\AgentChat\Model\RunModel($this->container))->claimById($runId), 'a stream holds it');
+        $provider = new FakeProvider([[FakeProvider::text('Twice?')]]);
+
+        $message = (new BotRunner($this->container, $provider))->runToCompletion($runId);
+
+        $this->assertCount(0, $provider->calls);
+        $this->assertSame(MessageStatus::Submitted, $message->status);
+        $this->assertSame('running', $this->runRow($runId)['status']);
+    }
+
+    public function testProviderRequestsAreHeldToTheRunTimeLimit(): void
+    {
+        $this->container['configModel']->save([
+            'aiconnector_profiles' => json_encode([['id' => 'p1', 'label' => 'Local', 'provider' => 'ollama', 'model' => 'gemma4:12b', 'base_url' => 'http://localhost:11434/v1']]),
+            'aiconnector_allow_private' => '1',
+            'agentchat_max_run_seconds' => '60',
+        ]);
+        $this->container['memoryCache']->flush();
+
+        $limits = (new BotRunner($this->container))->provider('p1')->requestLimits();
+
+        $this->assertSame(30.0, $limits->idleTimeout, 'the longest wait between two chunks');
+        $this->assertSame(70.0, $limits->maxDuration, 'the run time limit plus 10 s');
+        $this->assertSame(0, $limits->maxRedirects);
+    }
 }

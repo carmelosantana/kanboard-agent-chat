@@ -1,7 +1,7 @@
 <?php
 namespace Kanboard\Plugin\AgentChat\Schema;
 
-const VERSION = 1;
+const VERSION = 2;
 
 // utf8mb4 (not core's utf8) so chat text keeps emoji; opaque ids (client_msg_id, source, external_id)
 // use utf8mb4_bin so UNIQUE matches exactly, as on SQLite and Postgres. TEXT columns carry no DEFAULT.
@@ -97,4 +97,12 @@ function version_1($pdo)
         FULLTEXT KEY ft_title_body (title, body),
         FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE CASCADE
     ) ENGINE=InnoDB CHARSET=utf8mb4');
+}
+
+// The run lifecycle's queries: the reaper and the instance limit (status, started_at), the
+// per-user hourly and concurrency limits (asked_by, started_at). They run on every poll.
+function version_2($pdo)
+{
+    $pdo->exec('CREATE INDEX agentchat_runs_status_idx ON agentchat_runs(status, started_at)');
+    $pdo->exec('CREATE INDEX agentchat_runs_asker_idx ON agentchat_runs(asked_by, started_at)');
 }

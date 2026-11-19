@@ -1,7 +1,7 @@
 <?php
 namespace Kanboard\Plugin\AgentChat\Schema;
 
-const VERSION = 1;
+const VERSION = 2;
 
 // UNIQUE keys are named indexes, never inline constraints: SQLite cannot drop an inline UNIQUE
 // without rebuilding the table, and rebuilding a parent table inside Kanboard's migration
@@ -102,4 +102,12 @@ function version_1($pdo)
         INSERT INTO agentchat_knowledge_fts(agentchat_knowledge_fts, rowid, title, body) VALUES (\'delete\', old.id, old.title, old.body);
         INSERT INTO agentchat_knowledge_fts(rowid, title, body) VALUES (new.id, new.title, new.body);
     END');
+}
+
+// The run lifecycle's queries: the reaper and the instance limit (status, started_at), the
+// per-user hourly and concurrency limits (asked_by, started_at). They run on every poll.
+function version_2($pdo)
+{
+    $pdo->exec('CREATE INDEX IF NOT EXISTS agentchat_runs_status_idx ON agentchat_runs(status, started_at)');
+    $pdo->exec('CREATE INDEX IF NOT EXISTS agentchat_runs_asker_idx ON agentchat_runs(asked_by, started_at)');
 }

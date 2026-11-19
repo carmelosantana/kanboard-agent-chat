@@ -1,7 +1,7 @@
 <?php
 namespace Kanboard\Plugin\AgentChat\Schema;
 
-const VERSION = 1;
+const VERSION = 2;
 
 // UNIQUE keys are named unique indexes (same names in every dialect) so a later version can drop them.
 function version_1($pdo)
@@ -81,4 +81,12 @@ function version_1($pdo)
     )');
     $pdo->exec('CREATE UNIQUE INDEX IF NOT EXISTS agentchat_knowledge_source_uidx ON agentchat_knowledge(project_id, source, external_id)');
     $pdo->exec('CREATE INDEX IF NOT EXISTS agentchat_knowledge_search_idx ON agentchat_knowledge USING GIN (search)');
+}
+
+// The run lifecycle's queries: the reaper and the instance limit (status, started_at), the
+// per-user hourly and concurrency limits (asked_by, started_at). They run on every poll.
+function version_2($pdo)
+{
+    $pdo->exec('CREATE INDEX IF NOT EXISTS agentchat_runs_status_idx ON agentchat_runs(status, started_at)');
+    $pdo->exec('CREATE INDEX IF NOT EXISTS agentchat_runs_asker_idx ON agentchat_runs(asked_by, started_at)');
 }

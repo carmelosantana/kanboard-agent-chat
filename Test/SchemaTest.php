@@ -130,7 +130,7 @@ class SchemaTest extends Base
         $this->assertTrue($db->table('agentchat_rooms')->insert($room));
     }
 
-    public function testAllThreeDialectsDeclareVersion1(): void
+    public function testAllThreeDialectsDeclareBothVersions(): void
     {
         foreach (['Sqlite', 'Mysql', 'Postgres'] as $d) {
             $file = __DIR__."/../Schema/$d.php";
@@ -140,8 +140,9 @@ class SchemaTest extends Base
             foreach (array_keys(self::UNIQUE_INDEXES) as $index) {
                 $this->assertStringContainsString($index, $src, "$d: $index");
             }
-            $this->assertStringContainsString('const VERSION = 1;', $src, $d);
+            $this->assertStringContainsString('const VERSION = 2;', $src, $d);
             $this->assertStringContainsString('function version_1', $src, $d);
+            $this->assertStringContainsString('function version_2', $src, $d);
             foreach (self::TABLES as $t) {
                 $this->assertStringContainsString("CREATE TABLE IF NOT EXISTS $t ", $src, "$d: $t");
             }
@@ -151,6 +152,21 @@ class SchemaTest extends Base
         $pg = file_get_contents(__DIR__.'/../Schema/Postgres.php');
         $this->assertStringContainsString('search tsvector GENERATED ALWAYS AS', $pg);
         $this->assertStringContainsString('USING GIN (search)', $pg);
+    }
+
+    public function testVersion2IndexesTheRunLifecycleQueries(): void
+    {
+        \Kanboard\Plugin\AgentChat\Schema\version_2($this->container['db']->getConnection());
+
+        $pdo = $this->container['db']->getConnection();
+        $sql = match (DB_DRIVER) {
+            'sqlite' => "SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'agentchat_runs'",
+            'mysql' => "SELECT DISTINCT index_name FROM information_schema.statistics WHERE table_schema = DATABASE() AND table_name = 'agentchat_runs'",
+            'postgres' => "SELECT indexname FROM pg_indexes WHERE tablename = 'agentchat_runs'",
+        };
+        $names = array_map('strtolower', $pdo->query($sql)->fetchAll(\PDO::FETCH_COLUMN));
+        $this->assertContains('agentchat_runs_status_idx', $names);
+        $this->assertContains('agentchat_runs_asker_idx', $names);
     }
 
     /** Knowledge ids matching a full-text query, in the current dialect. */

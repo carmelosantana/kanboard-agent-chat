@@ -22,6 +22,8 @@ class KanboardHost extends Base implements HostAdapter
         'chat' => ['RoomController', 'show'],
         'poll' => ['RoomController', 'poll'],
         'send' => ['RoomController', 'send'],
+        'stop' => ['RoomController', 'stop'],
+        'stream' => ['StreamController', 'stream'],
     ];
 
     private const TONES = ['blue', 'green', 'orange', 'pink', 'purple', 'red', 'slate', 'teal'];

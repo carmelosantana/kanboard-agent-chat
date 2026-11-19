@@ -5,7 +5,7 @@
     <div class="agentchat-room__main">
         <?= new \ChatParts\View\Conversation($host, $messages, $host->url('poll', ['project_id' => $project['id']]), $afterId) ?>
         <?php if ($canPost): ?>
-            <?= new \ChatParts\View\Composer($host, $host->url('send', ['project_id' => $project['id']]), ['canAsk' => $canAsk, 'allowImages' => false]) ?>
+            <?= new \ChatParts\View\Composer($host, $host->url('send', ['project_id' => $project['id']]), ['canAsk' => $canAsk, 'allowImages' => false, 'stopUrl' => $host->url('stop', ['project_id' => $project['id']])]) ?>
         <?php else: ?>
             <?= new \ChatParts\View\Notice($host, 'info', t('You can read this room but not post in it.')) ?>
         <?php endif ?>
