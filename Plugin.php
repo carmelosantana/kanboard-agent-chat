@@ -5,6 +5,7 @@ use Kanboard\Core\Plugin\Base;
 use Kanboard\Core\Security\Role;
 use Kanboard\Plugin\AgentChat\Api\AgentChatKnowledgeProcedure;
 use Kanboard\Plugin\AgentChat\Api\AgentChatRoomProcedure;
+use Kanboard\Plugin\AgentChat\Helper\KanboardHost;
 use Kanboard\Plugin\AgentChat\Model\AccessPolicy;
 use Kanboard\Plugin\AgentChat\Model\ProjectModelWithChatFiles;
 
@@ -29,6 +30,11 @@ class Plugin extends Base
         // Chat images: FileController checks the file's room, project and private owner.
         $this->route->addRoute('agentchat/file/:id', 'FileController', 'show', 'AgentChat');
         $this->route->addRoute('agentchat/file/:id/thumb', 'FileController', 'thumb', 'AgentChat');
+        // The task drawer: DrawerController checks the task's project and the task itself.
+        $this->route->addRoute('agentchat/drawer/:task_id', 'DrawerController', 'show', 'AgentChat');
+        $this->route->addRoute('agentchat/drawer/:task_id/send', 'DrawerController', 'send', 'AgentChat');
+        $this->route->addRoute('agentchat/drawer/:task_id/share', 'DrawerController', 'share', 'AgentChat');
+        $this->projectAccessMap->add('DrawerController', '*', Role::PROJECT_VIEWER);
         $this->removeChatFilesWithProjects();
 
         // JSON-RPC: withObject so core wins any name clash (withCallback/withClassAndMethod would shadow core).
@@ -41,8 +47,19 @@ class Plugin extends Base
                 'agentchat_can_view' => (new AccessPolicy($this->container))->canView((int) $this->userSession->getId(), (int) $project['id']),
             ],
         ]);
-        // The kit's CSS, JS and htmx-config meta are registered by RoomController::show(), so
-        // they load on the chat page only.
+        // "Ask the bot" on the task view, for whoever may ask the bot there now; the button also
+        // loads the kit's assets on that page. The kit's CSS, JS and htmx-config meta otherwise
+        // load on the chat page only (RoomController::show()).
+        $this->hook->on('template:task:sidebar:information', [
+            'template' => 'AgentChat:drawer/button',
+            'callable' => function (array $task): array {
+                $canAsk = (new AccessPolicy($this->container))->canAskBot((int) $this->userSession->getId(), (int) $task['project_id']);
+                if ($canAsk) {
+                    (new KanboardHost($this->container))->registerAssets();
+                }
+                return ['agentchat_can_ask' => $canAsk];
+            },
+        ]);
     }
 
     /**

@@ -2,8 +2,10 @@
 
 namespace Kanboard\Plugin\AgentChat\Model;
 
+use ChatParts\Model\Part\FilePart;
 use InvalidArgumentException;
 use Kanboard\Core\Base;
+use Kanboard\Plugin\AgentChat\Helper\KanboardHost;
 use Kanboard\Core\Thumbnail;
 use Throwable;
 
@@ -166,6 +168,54 @@ class FileModel extends Base
             $this->removeBlobs($written);
             throw $e;
         }
+    }
+
+    /**
+     * A copy of a stored file for $roomId, ahead of its message (message_id NULL, as store()):
+     * a new row with its own blobs under new keys, never the original's keys, so removing
+     * either never touches the other. A failure removes what this call wrote and rethrows.
+     */
+    public function copy(array $file, int $roomId): int
+    {
+        $key = 'agentchat/'.$roomId.'/'.bin2hex(random_bytes(16));
+        $thumbKey = ($file['thumb_key'] ?? '') === '' ? null : $key.'-thumb';
+        $written = [];
+        try {
+            $blob = $this->objectStorage->get((string) $file['storage_key']);
+            $this->objectStorage->put($key, $blob);
+            $written[] = $key;
+            if ($thumbKey !== null) {
+                $thumb = $this->objectStorage->get((string) $file['thumb_key']);
+                $this->objectStorage->put($thumbKey, $thumb);
+                $written[] = $thumbKey;
+            }
+            $id = $this->db->table(self::TABLE)->persist([
+                'message_id' => null,
+                'room_id' => $roomId,
+                'uploaded_by' => $file['uploaded_by'],
+                'name' => $file['name'],
+                'mime' => $file['mime'],
+                'size' => $file['size'],
+                'storage_key' => $key,
+                'thumb_key' => $thumbKey,
+                'created_at' => time(),
+            ]);
+            if (! $id) {
+                throw new \RuntimeException("Could not store a file row in room #$roomId.");
+            }
+            return (int) $id;
+        } catch (Throwable $e) {
+            $this->removeBlobs($written);
+            throw $e;
+        }
+    }
+
+    /** The message part for a stored file: root-relative URLs to FileController. */
+    public function part(array $file): FilePart
+    {
+        $host = new KanboardHost($this->container);
+        $id = (int) $file['id'];
+        return new FilePart('f'.$id, (string) $file['name'], (string) $file['mime'], $host->url('file', ['id' => $id]), $file['thumb_key'] === null ? null : $host->url('thumb', ['id' => $id]));
     }
 
     /**

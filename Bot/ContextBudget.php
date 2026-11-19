@@ -79,12 +79,18 @@ class ContextBudget extends Base
         return ['window' => $fit['window'], 'segments' => $fit['segments']];
     }
 
-    /** Whether a room question (the message body and the images the bot would get) fits the project's model at all. */
-    public function questionFits(int $projectId, int $userId, string $body, int $imageCount = 0): bool
+    /**
+     * Whether a question (the message body and the images the bot would get) fits the project's
+     * model at all; in a drawer ($taskId) the task segment counts too. The caller has checked
+     * the task (AskerScope::canReadTask); one the asker cannot read counts as none.
+     */
+    public function questionFits(int $projectId, int $userId, string $body, int $imageCount = 0, ?int $taskId = null): bool
     {
-        $tools = ChatAgent::readTools(new AskerScope($this->container, $userId, $projectId), new SourceRegistry());
+        $scope = new AskerScope($this->container, $userId, $projectId, $taskId);
+        $task = $scope->taskId === null ? null : ($this->taskFinderModel->getById($scope->taskId) ?: null);
+        $tools = ChatAgent::readTools($scope, new SourceRegistry());
         $images = max(0, min(self::MAX_IMAGES, $imageCount)) * self::IMAGE_TOKENS;
-        return $this->fit($projectId, $userId, null, $tools, [], $this->tokens($this->author($userId).': '.$body, $projectId) + $images)['fits'];
+        return $this->fit($projectId, $userId, $task, $tools, [], $this->tokens($this->author($userId).': '.$body, $projectId) + $images)['fits'];
     }
 
     /**

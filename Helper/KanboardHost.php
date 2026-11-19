@@ -27,6 +27,9 @@ class KanboardHost extends Base implements HostAdapter
         'stream' => ['StreamController', 'stream'],
         'file' => ['FileController', 'show'],
         'thumb' => ['FileController', 'thumb'],
+        'drawer' => ['DrawerController', 'show'],
+        'drawer_send' => ['DrawerController', 'send'],
+        'drawer_share' => ['DrawerController', 'share'],
     ];
 
     private const TONES = ['blue', 'green', 'orange', 'pink', 'purple', 'red', 'slate', 'teal'];
@@ -38,6 +41,25 @@ class KanboardHost extends Base implements HostAdapter
         [$controller, $action] = self::ROUTES[$route] ?? throw new InvalidArgumentException("Unknown AgentChat route: $route");
 
         return $this->helper->url->to($controller, $action, $params + ['plugin' => 'AgentChat']);
+    }
+
+    /**
+     * The kit's stylesheet and AgentChat's, the kit's scripts (htmx, then its SSE extension,
+     * which needs the htmx global, then chatparts.js) and the htmx-config meta, for the page
+     * being rendered: the chat page, or a task page that shows the drawer button. Called while
+     * the page's content renders, which Kanboard does before its layout.
+     */
+    public function registerAssets(): void
+    {
+        if (in_array(['template' => 'AgentChat:layout/htmx-meta'], $this->hook->getListeners('template:layout:head'), true)) {
+            return; // once per page
+        }
+        $this->hook->on('template:layout:css', ['template' => self::ASSET_DIR.'chatparts.css']);
+        $this->hook->on('template:layout:css', ['template' => 'plugins/AgentChat/Assets/agentchat.css']);
+        foreach (['htmx.min.js', 'htmx-ext-sse.js', 'chatparts.js'] as $file) {
+            $this->hook->on('template:layout:js', ['template' => self::ASSET_DIR.$file]);
+        }
+        $this->hook->on('template:layout:head', ['template' => 'AgentChat:layout/htmx-meta']);
     }
 
     public function csrfField(): string

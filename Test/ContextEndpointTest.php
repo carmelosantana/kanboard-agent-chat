@@ -161,4 +161,24 @@ class ContextEndpointTest extends Base
         $this->loginAs($this->member);
         $this->assertStringNotContainsString('cp-ctl--context', $this->call('show', [])['body'], 'no gate, no ring');
     }
+
+    public function testDrawerRingCountsTheTaskAndRefusesAForeignOne(): void
+    {
+        $task = (int) $this->container['taskCreationModel']->create(['project_id' => $this->project, 'title' => 'Fix the login page']);
+        $elsewhere = (int) $this->container['projectModel']->create(['name' => 'Elsewhere']);
+        $foreign = (int) $this->container['taskCreationModel']->create(['project_id' => $elsewhere, 'title' => 'Not yours']);
+        $this->loginAs($this->member);
+
+        $rows = $this->rows($this->call('context', ['task_id' => (string) $task, 'draft_len' => '10'])['body']);
+        $this->assertArrayHasKey('task', $rows, 'the drawer task has its own segment');
+        $this->assertGreaterThan(0, (int) str_replace(',', '', $rows['task']));
+
+        foreach ([$foreign, 999999] as $taskId) {
+            try {
+                $this->call('context', ['task_id' => (string) $taskId]);
+                $this->fail("task #$taskId is not this project's");
+            } catch (AccessForbiddenException) {
+            }
+        }
+    }
 }

@@ -1,4 +1,5 @@
-/* The chat page: thread and composer beside the People/Agents/Bots rail. Loaded on the chat page only. */
+/* The chat page (thread and composer beside the People/Agents/Bots rail) and the task page's
+   drawer. Loaded on the chat page, and on a task page that shows "Ask the bot". */
 .agentchat-room {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 240px;
@@ -13,8 +14,46 @@
   padding: 0 12px 12px 0;
 }
 .agentchat-room__main .cp-thread { flex: 1 1 auto; }
+.agentchat-people { display: flex; flex-direction: column; min-height: 0; }
+.agentchat-people__rail { display: flex; flex: 1 1 auto; min-height: 0; }
+.agentchat-people__rail .cp-rail { flex: 1 1 auto; }
+/* The toggle exists for small screens only; it stays focusable there (visually hidden). */
+.agentchat-people__toggle { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip: rect(0 0 0 0); border: 0; }
+.agentchat-people__button { display: none; }
 @media (max-width: 768px) {
   .agentchat-room { grid-template-columns: 1fr; height: auto; }
   .agentchat-room__main { height: 70vh; padding-right: 0; }
   .agentchat-room .cp-rail { border-left: 0; }
+  .agentchat-people { order: -1; margin-bottom: 8px; }
+  .agentchat-people__button {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    align-self: flex-start;
+    min-height: 44px;
+    padding: 0 14px;
+    border: 1px solid var(--cp-border);
+    border-radius: 8px;
+    background: var(--cp-surface);
+    color: var(--cp-text);
+    cursor: pointer;
+  }
+  .agentchat-people__toggle:focus-visible + .agentchat-people__button { outline: 2px solid var(--cp-accent); outline-offset: 2px; }
+  .agentchat-people__toggle:checked + .agentchat-people__button { background: var(--cp-hover); }
+  .agentchat-people__toggle:not(:checked) ~ .agentchat-people__rail { display: none; }
 }
+
+/* The task drawer's "Share to room", under its composer. */
+.agentchat-share { display: flex; justify-content: flex-end; margin-top: 8px; }
+.agentchat-share__button {
+  min-height: 36px;
+  padding: 0 14px;
+  border: 1px solid var(--cp-border);
+  border-radius: 8px;
+  background: var(--cp-surface);
+  color: var(--cp-text);
+  cursor: pointer;
+}
+.agentchat-share__button:hover { background: var(--cp-hover); }
+.cp-drawer .cp-thread { flex: 1 1 auto; min-height: 0; }
+.cp-drawer .cp-box { margin-top: 8px; }

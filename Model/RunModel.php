@@ -41,12 +41,14 @@ class RunModel extends Base
     /**
      * The bot's draft (submitted, empty, replying to $questionId) and a pending run for it,
      * once the limits allow. A question that already has a draft and run gets those back with
-     * sid null.
+     * sid null. $draftOpts are the draft's visibility, private_to and task_id: a drawer
+     * question's draft is private to its asker, on its task.
      *
+     * @param array{visibility?: string, private_to?: int, task_id?: int} $draftOpts
      * @return array{run_id: int, sid: ?string, message_id: int}
      * @throws RateLimited|Busy
      */
-    public function ask(int $roomId, int $askedBy, int $questionId): array
+    public function ask(int $roomId, int $askedBy, int $questionId, array $draftOpts = []): array
     {
         $draftId = $this->db->table(MessageModel::TABLE)
             ->eq('room_id', $roomId)
@@ -63,7 +65,7 @@ class RunModel extends Base
             $roomId,
             (new ParticipantResolver($this->container))->bot(),
             [],
-            ['status' => MessageStatus::Submitted->value, 'reply_to' => $questionId],
+            ['status' => MessageStatus::Submitted->value, 'reply_to' => $questionId] + array_intersect_key($draftOpts, array_flip(['visibility', 'private_to', 'task_id'])),
         );
         return $this->insert($messageId, $roomId, $askedBy) + ['message_id' => $messageId];
     }

@@ -391,6 +391,17 @@ class RoomControllerTest extends Base
         $this->assertStringNotContainsString('name="message"', $html);
     }
 
+    public function testPeopleRailSitsBehindAToggleWithoutScript(): void
+    {
+        $this->loginAs($this->member);
+
+        $html = $this->call('show', ['project_id' => $this->projectA])['body'];
+
+        $this->assertMatchesRegularExpression('~<input type="checkbox" id="agentchat-people-toggle" class="agentchat-people__toggle" aria-controls="agentchat-people-rail">\s*<label for="agentchat-people-toggle" class="agentchat-people__button">~', $html);
+        $this->assertMatchesRegularExpression('~<div id="agentchat-people-rail" class="agentchat-people__rail"><aside class="cp-rail"~', $html);
+        $this->assertDoesNotMatchRegularExpression('~<div class="agentchat-room">.*(<script|\son[a-z]+=)~s', $html, 'no inline script or handler');
+    }
+
     public function testShowForbidsOutsiders(): void
     {
         $this->loginAs($this->outsider);

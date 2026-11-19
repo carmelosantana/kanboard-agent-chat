@@ -18,6 +18,7 @@ use Kanboard\Core\Security\Role;
  *  - ask:    post rights and the project's ask role (managers | members | everyone);
  *            "everyone" means anyone who can view, viewers included
  *  - manage: project manager or app admin
+ *  - ask the bot (canAskBot): post and ask rights while the project's AI gate is open
  */
 class AccessPolicy extends Base
 {
@@ -43,6 +44,12 @@ class AccessPolicy extends Base
             'everyone' => true,
             default => in_array($level, ['admin', Role::PROJECT_MANAGER, Role::PROJECT_MEMBER], true),
         };
+    }
+
+    /** Whether $userId gets the bot here now: may post and ask, and the project's AI gate is open (asked at request time). */
+    public function canAskBot(int $userId, int $projectId): bool
+    {
+        return $this->canPost($userId, $projectId) && $this->canAsk($userId, $projectId) && AiGate::isOpenFor($this->container, $projectId);
     }
 
     public function canManage(int $userId, int $projectId): bool
