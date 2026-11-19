@@ -23,6 +23,8 @@ class MessageModel extends Base
 {
     public const TABLE = 'agentchat_messages';
     public const MAX_BODY = 8000;
+    /** Bytes of raw body a sender may submit (web send, chatSendMessage); larger is refused before create(). */
+    public const MAX_REQUEST_BYTES = 65536;
     public const SENDER_KINDS = ['human', 'agent', 'bot', 'system'];
     public const VISIBILITIES = ['room', 'private'];
     private const OPTIONS = ['client_msg_id', 'visibility', 'private_to', 'task_id', 'status', 'metadata'];
@@ -146,6 +148,26 @@ class MessageModel extends Base
             ->eq('room_id', $roomId)
             ->eq('visibility', 'room')
             ->gt('id', $afterId)
+            ->asc('id')
+            ->limit(max(1, min($limit, 200)))
+            ->findAll();
+    }
+
+    /**
+     * Like listAfter() without bot drafts: a bot message appears only once final (done, stopped
+     * or error), so an API reader gets complete answers. A draft older than the reader's cursor
+     * is not shown later; the API documents it.
+     */
+    public function listFinalAfter(int $roomId, int $afterId, int $limit = 50): array
+    {
+        return $this->db->table(self::TABLE)
+            ->eq('room_id', $roomId)
+            ->eq('visibility', 'room')
+            ->gt('id', $afterId)
+            ->beginOr()
+                ->neq('sender_kind', 'bot')
+                ->notIn('status', [MessageStatus::Submitted->value, MessageStatus::Streaming->value])
+            ->closeOr()
             ->asc('id')
             ->limit(max(1, min($limit, 200)))
             ->findAll();

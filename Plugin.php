@@ -4,6 +4,7 @@ namespace Kanboard\Plugin\AgentChat;
 use Kanboard\Core\Plugin\Base;
 use Kanboard\Core\Security\Role;
 use Kanboard\Plugin\AgentChat\Api\AgentChatKnowledgeProcedure;
+use Kanboard\Plugin\AgentChat\Api\AgentChatRoomProcedure;
 use Kanboard\Plugin\AgentChat\Model\AccessPolicy;
 
 class Plugin extends Base
@@ -23,6 +24,7 @@ class Plugin extends Base
 
         // JSON-RPC: withObject so core wins any name clash (withCallback/withClassAndMethod would shadow core).
         $this->api->getProcedureHandler()->withObject(new AgentChatKnowledgeProcedure($this->container));
+        $this->api->getProcedureHandler()->withObject(new AgentChatRoomProcedure($this->container));
 
         $this->hook->on('template:project-header:view-switcher', [
             'template' => 'AgentChat:project_header/tab',

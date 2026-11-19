@@ -23,9 +23,6 @@ use Kanboard\Plugin\AgentChat\Model\RoomModel;
  */
 class RoomController extends BaseController
 {
-    /** Bytes; anything larger is refused before it reaches the model. */
-    public const MAX_REQUEST_BODY = 65536;
-
     private const PAGE_SIZE = 50;
 
     private const ASSETS = 'plugins/AgentChat/vendor-chatparts/assets/';
@@ -99,7 +96,7 @@ class RoomController extends BaseController
             $this->notice(t('Write a message first.'));
             return;
         }
-        if (strlen($body) > self::MAX_REQUEST_BODY) {
+        if (strlen($body) > MessageModel::MAX_REQUEST_BYTES) {
             $this->notice(t('This message is too long to send.'));
             return;
         }

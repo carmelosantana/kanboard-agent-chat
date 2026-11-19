@@ -156,6 +156,22 @@ class KnowledgeProcedureTest extends Base
             $this->fail('Expected a RuntimeException');
         } catch (RuntimeException $e) {
             $this->assertSame('The knowledge store could not save this document.', $e->getMessage());
+            $this->assertSame(-32603, $e->getCode(), 'JSON-RPC internal error, not code 0');
+        }
+    }
+
+    public function testDatabaseErrorDuringTheAccessCheckIsAPlainError(): void
+    {
+        $this->actAs($this->manager);
+        $this->container['db']->getConnection()->exec('DROP TABLE project_has_users'.(DB_DRIVER === 'postgres' ? ' CASCADE' : ''));
+        foreach ([fn () => $this->upsert(), fn () => $this->rpc()->knowledgeDelete($this->project, 'save-it', 'post-1')] as $i => $call) {
+            try {
+                $call();
+                $this->fail("Call #$i: expected a RuntimeException");
+            } catch (RuntimeException $e) {
+                $this->assertSame('The knowledge store could not save this document.', $e->getMessage(), "Call #$i");
+                $this->assertSame(-32603, $e->getCode(), "Call #$i");
+            }
         }
     }
 
