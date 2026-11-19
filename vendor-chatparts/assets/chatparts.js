@@ -111,9 +111,23 @@
     return maxFinal === null ? minOpen - 1 : Math.min(maxFinal, minOpen - 1);
   }
 
-  /** For a bubble {state, failed} whose id is already shown: 'replace' when only the newcomer is final, else 'drop'. */
+  /**
+   * For a bubble {state, failed, hasStream} whose id is already shown: 'replace' when only the
+   * newcomer is final, or when neither is final and only the newcomer carries a stream (the
+   * asker's own copy, which a poll may have beaten to the page); else 'drop'.
+   */
   function dedupeAction(existing, incoming) {
-    return !isFinal(existing) && isFinal(incoming) ? 'replace' : 'drop';
+    if (isFinal(existing)) return 'drop';
+    if (isFinal(incoming)) return 'replace';
+    return incoming.hasStream && !existing.hasStream ? 'replace' : 'drop';
+  }
+
+  /** Client-error statuses whose kit Notice is shown (htmx 2 swaps no 4xx response by default). */
+  var NOTICE_STATUSES = [400, 403, 409, 413, 422, 429];
+
+  /** Whether an error response is a kit Notice to swap in: one of NOTICE_STATUSES and a cp-notice. */
+  function shouldSwapError(status, text) {
+    return NOTICE_STATUSES.indexOf(status) >= 0 && typeof text === 'string' && text.indexOf('class="cp-notice') >= 0;
   }
 
   /** Whether any streaming message in [{id, state}] is one this composer posted (`ownIds`, a Set). */
@@ -164,6 +178,7 @@
     isFinal: isFinal,
     pollCursor: pollCursor,
     dedupeAction: dedupeAction,
+    shouldSwapError: shouldSwapError,
     format: format,
     isBlank: isBlank,
     hasOwnStreaming: hasOwnStreaming,
@@ -198,10 +213,18 @@
 
   function conversation() { return document.getElementById('cp-conversation'); }
 
-  /** The bubbles under `root` that carry an id, as [{id, state, el}] in document order. */
+  var STREAM_SEL = '[sse-connect], [data-sse-connect]';
+
+  /** The bubbles under `root` that carry an id, as [{id, state, failed, hasStream, el}] in document order. */
   function messagesIn(root) {
     return Array.prototype.map.call(root.querySelectorAll('.cp-msg[data-id]'), function (el) {
-      return { id: el.getAttribute('data-id'), state: el.getAttribute('data-state'), failed: el.hasAttribute('data-cp-failed'), el: el };
+      return {
+        id: el.getAttribute('data-id'),
+        state: el.getAttribute('data-state'),
+        failed: el.hasAttribute('data-cp-failed'),
+        hasStream: el.matches(STREAM_SEL) || !!el.querySelector(STREAM_SEL),
+        el: el,
+      };
     });
   }
   function eltOf(e) { return (e.detail && e.detail.elt) || e.target; }
@@ -515,8 +538,8 @@
 
   /**
    * One bubble per data-id (a message can come by the send response, the poll and the stream):
-   * a later copy replaces the shown one in place when only the later copy is finished, and is
-   * dropped otherwise.
+   * a later copy replaces the shown one in place when only the later copy is finished, or when
+   * neither is and only the later copy carries the stream; it is dropped otherwise.
    */
   function dedupe(conv) {
     var shown = new Map();
@@ -545,8 +568,8 @@
    * extension, and dropping sse-connect stops its retry timer.
    */
   function discard(el) {
-    var streams = Array.prototype.slice.call(el.querySelectorAll('[sse-connect], [data-sse-connect]'));
-    if (matches(el, '[sse-connect], [data-sse-connect]')) streams.push(el);
+    var streams = Array.prototype.slice.call(el.querySelectorAll(STREAM_SEL));
+    if (matches(el, STREAM_SEL)) streams.push(el);
     streams.forEach(function (node) {
       if (window.htmx && typeof window.htmx.trigger === 'function') window.htmx.trigger(node, 'htmx:beforeCleanupElement');
       forgetStream(node);
@@ -803,9 +826,19 @@
     if (document.hidden && matches(eltOf(e), '[data-cp-poll]')) e.preventDefault();
   });
 
+  // A kit Notice sent with a client-error status is shown in the request's target.
+  document.addEventListener('htmx:beforeSwap', function (e) {
+    var xhr = e.detail.xhr;
+    if (!xhr || !shouldSwapError(xhr.status, xhr.responseText)) return;
+    e.detail.shouldSwap = true;
+    e.detail.isError = false;
+  });
+
   document.addEventListener('htmx:afterRequest', function (e) {
     var el = eltOf(e);
-    if (matches(el, 'form.cp-box') && e.detail.successful) {
+    var xhr = e.detail.xhr;
+    // A swapped error Notice reads as successful; the draft stays so it can be fixed and resent.
+    if (matches(el, 'form.cp-box') && e.detail.successful && !(xhr && xhr.status >= 400)) {
       resetComposer(el);
       scroll.stuck = true;
     }
@@ -832,7 +865,7 @@
       if (name) announce(t('%s answered', name));
     } else if (msg.type === 'done') {
       if (msg.target && typeof msg.target.close === 'function') msg.target.close();
-      forgetStream(e.target.closest && e.target.closest('[sse-connect], [data-sse-connect]'));
+      forgetStream(e.target.closest && e.target.closest(STREAM_SEL));
     }
     onSwapped();
   });
