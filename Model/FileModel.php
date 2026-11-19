@@ -168,12 +168,18 @@ class FileModel extends Base
         }
     }
 
-    /** Gives files stored ahead of their message to it. @param list<int> $ids */
-    public function linkToMessage(array $ids, int $messageId): void
+    /**
+     * Gives files stored ahead of their message to it; true when every one now belongs to it.
+     *
+     * @param list<int> $ids
+     */
+    public function linkToMessage(array $ids, int $messageId): bool
     {
-        if ($ids !== []) {
-            $this->db->table(self::TABLE)->in('id', $ids)->isNull('message_id')->update(['message_id' => $messageId]);
+        if ($ids === []) {
+            return true;
         }
+        $this->db->table(self::TABLE)->in('id', $ids)->isNull('message_id')->update(['message_id' => $messageId]);
+        return $this->db->table(self::TABLE)->in('id', $ids)->eq('message_id', $messageId)->count() === count($ids);
     }
 
     public function get(int $id): ?array

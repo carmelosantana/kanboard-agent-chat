@@ -30,6 +30,14 @@ class LimitsSettingsTest extends Base
         $this->assertFalse($run->executeUnadvertisedTools);
     }
 
+    public function testARetryGetsOnlyTheRunTimeThatIsLeft(): void
+    {
+        $limits = new LimitsSettings($this->container);
+
+        $this->assertSame(60.0, $limits->runLimits(0, 30.0)->maxRunSeconds);
+        $this->assertSame(0.001, $limits->runLimits(0, 95.0)->maxRunSeconds, 'never 0, which php-agents reads as no limit');
+    }
+
     public function testConfigOverridesAndInvalidValuesFallBack(): void
     {
         $this->container['configModel']->save([

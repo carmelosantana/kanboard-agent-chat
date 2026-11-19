@@ -68,13 +68,17 @@ final class LimitsSettings
         return $this->int(self::QUESTIONS_PER_HOUR, 30);
     }
 
-    /** The php-agents limits for one run; $maxInputTokens caps the new question (0: no cap). */
-    public function runLimits(int $maxInputTokens = 0): RunLimits
+    /**
+     * The php-agents limits for one run; $maxInputTokens caps the new question (0: no cap).
+     * $elapsedSeconds is run time already spent (a retry): the time limit is what is left, at
+     * least 1 ms, since php-agents reads 0 as no limit.
+     */
+    public function runLimits(int $maxInputTokens = 0, float $elapsedSeconds = 0.0): RunLimits
     {
         return new RunLimits(
             maxToolCallsPerTurn: $this->maxToolCallsPerTurn(),
             maxToolCallsPerRun: $this->maxToolCallsPerRun(),
-            maxRunSeconds: $this->maxRunSeconds(),
+            maxRunSeconds: max(0.001, $this->maxRunSeconds() - max(0.0, $elapsedSeconds)),
             maxResponseBytes: $this->maxResponseBytes(),
             maxInputTokens: max(0, $maxInputTokens),
         );

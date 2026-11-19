@@ -171,4 +171,24 @@ class SendImagesTest extends Base
         $this->assertSame([], $this->files());
         $this->assertSame(0, $this->blobCount());
     }
+
+    public function testAFailedLinkSendsTheTextAloneWithAWarning(): void
+    {
+        if (DB_DRIVER !== 'sqlite') {
+            $this->markTestSkipped('the failure is injected with a SQLite trigger');
+        }
+        // Every update of a file row is silently dropped: the link to the message never lands.
+        $this->container['db']->getConnection()->exec('CREATE TRIGGER agentchat_files_frozen BEFORE UPDATE ON agentchat_files BEGIN SELECT RAISE(IGNORE); END');
+
+        $out = $this->send('with a picture', [$this->img->upload(ImageFixtures::png())]);
+
+        $this->assertSame(200, $out['status'], 'the message itself went out');
+        $this->assertStringContainsString('cp-notice--warning', $out['body']);
+        $this->assertStringContainsString('The images could not be attached', $out['body']);
+        [$msg] = $this->messages();
+        $this->assertSame(['text'], array_column(json_decode($msg['parts'], true), 'type'), 'no FilePart left pointing at a file nobody can read');
+        $this->assertSame([], $this->files());
+        $this->assertSame(0, $this->blobCount());
+        $this->assertStringNotContainsString('cp-file', $out['body']);
+    }
 }

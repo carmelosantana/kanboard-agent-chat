@@ -154,6 +154,18 @@ class FileControllerTest extends Base
         $this->call('show', $id);
     }
 
+    public function testFileResponsesDropTheSessionsNoCacheHeaders(): void
+    {
+        $id = $this->file(ImageFixtures::png());
+        $this->loginAs($this->member);
+
+        $out = $this->call('show', $id);
+
+        $this->assertArrayNotHasKey('Pragma', $out['headers']);
+        $this->assertArrayNotHasKey('Expires', $out['headers']);
+        $this->assertSame(['Expires', 'Pragma'], FileController::DROPPED_HEADERS, 'PHP\'s session cache limiter sends these; the file response removes them');
+    }
+
     public function testMissingFileIs404(): void
     {
         $this->loginAs($this->member);

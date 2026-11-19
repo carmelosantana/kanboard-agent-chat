@@ -706,5 +706,65 @@ class BotRunnerTest extends Base
 
         $this->assertSame(MessageStatus::Done, $final->status);
         $this->assertSame('Ana: @bot see this?', $this->sentQuestion($provider));
+        $this->assertSame("Text only.\n\n_The bot could not see the images._", $this->text($final));
+    }
+
+    public function testAProviderThatRefusesImagesIsAskedAgainWithTextAlone(): void
+    {
+        $runId = $this->ask('@bot what is this?');
+        $this->attachToQuestion();
+        $this->container['logger'] = $this->createMock(\Psr\Log\LoggerInterface::class);
+        $provider = new FakeProvider([new RuntimeException('400: this model does not support image input'), [FakeProvider::text('No image here, but: hello.')]]);
+
+        $final = $this->runBot($runId, $provider);
+
+        $this->assertCount(2, $provider->calls);
+        $first = $provider->calls[0]['messages'];
+        $second = $provider->calls[1]['messages'];
+        $this->assertIsArray(end($first)->content(), 'the first call carried the image');
+        $this->assertSame('Ana: @bot what is this?', end($second)->content(), 'the retry is text alone');
+        $this->assertSame(MessageStatus::Done, $final->status);
+        $this->assertSame("No image here, but: hello.\n\n_The bot could not see the images._", $this->text($final));
+        $this->assertSame(['delta', 'final'], $this->eventNames());
+        $this->assertTrue($final->metadata['images_unseen']);
+        $this->assertSame('done', $this->runRow($runId)['status']);
+    }
+
+    public function testAProviderFailureAfterTextIsAnErrorWithoutARetry(): void
+    {
+        $runId = $this->ask('@bot what is this?');
+        $this->attachToQuestion();
+        $this->container['logger'] = $this->createMock(\Psr\Log\LoggerInterface::class);
+        $provider = new FakeProvider([[FakeProvider::text('It looks like '), static fn () => throw new RuntimeException('connection reset')], [FakeProvider::text('never asked')]]);
+
+        $final = $this->runBot($runId, $provider);
+
+        $this->assertCount(1, $provider->calls);
+        $this->assertSame(MessageStatus::Error, $final->status);
+        $this->assertSame('The bot could not answer.', $this->text($final));
+        $this->assertArrayNotHasKey('images_unseen', $final->metadata);
+    }
+
+    public function testAProviderFailureWithoutImagesIsNotRetried(): void
+    {
+        $runId = $this->ask('@bot hello?');
+        $this->container['logger'] = $this->createMock(\Psr\Log\LoggerInterface::class);
+        $provider = new FakeProvider([new RuntimeException('upstream 500'), [FakeProvider::text('never asked')]]);
+
+        $final = $this->runBot($runId, $provider);
+
+        $this->assertCount(1, $provider->calls);
+        $this->assertSame(MessageStatus::Error, $final->status);
+    }
+
+    public function testNoNoteWhenTheProjectKeepsImagesFromTheBot(): void
+    {
+        (new \Kanboard\Plugin\AgentChat\Model\ProjectSettings($this->container, $this->project))->setBotImages(false);
+        $runId = $this->ask('@bot what is this?');
+        $this->attachToQuestion();
+
+        $final = $this->runBot($runId, new FakeProvider([[FakeProvider::text('Answer.')]]));
+
+        $this->assertSame('Answer.', $this->text($final), 'images off is the project setting, not a failure');
     }
 }

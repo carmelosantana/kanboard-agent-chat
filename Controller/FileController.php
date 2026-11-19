@@ -18,6 +18,9 @@ class FileController extends BaseController
 {
     public const CACHE_SECONDS = 3600;
 
+    /** Sent by PHP's session cache limiter at session start; they contradict Cache-Control here. */
+    public const DROPPED_HEADERS = ['Expires', 'Pragma'];
+
     public function show(): void
     {
         $this->serve(false);
@@ -45,6 +48,9 @@ class FileController extends BaseController
             return;
         }
 
+        foreach (headers_sent() ? [] : self::DROPPED_HEADERS as $header) {
+            header_remove($header);
+        }
         $this->response
             ->withStatusCode(200)
             ->withContentType($thumb ? 'image/png' : (string) $file['mime'])

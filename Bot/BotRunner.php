@@ -47,8 +47,10 @@ use Pimple\Container;
  * provider call, only "Your message is too long for this model."). Everyone's messages go in
  * as user turns prefixed with their name, the bot's earlier answers as assistant turns, the
  * asker's latest message last, with its images when the project's botImages() setting is on
- * (StorageImageResolver; an image it refuses leaves the question as text). Tool results are
- * held to the fit's sources cap (SourceCap).
+ * (StorageImageResolver; an image it refuses leaves the question as text). A provider that
+ * fails before any output on a question with images is asked once more with the text alone;
+ * either way the answer ends with "The bot could not see the images.". Tool results are held to
+ * the fit's sources cap (SourceCap).
  * Every tool reads as the asker (AskerScope); an asker who can no longer view the project gets
  * no run at all.
  *
@@ -145,6 +147,7 @@ class BotRunner extends Base
         $budget = new ContextBudget($this->container);
         $sources = new SourceRegistry();
         $output = null;
+        $imagesUnseen = false;
         $model = '';
         $errorCode = null;
 
@@ -171,13 +174,27 @@ class BotRunner extends Base
                     $model = $provider->getModel();
                     [$question, $imageBytesTokens] = $this->question($questionText, $images, $askerId, (int) $run['room_id'], $runId);
                     $limits = new LimitsSettings($this->container);
-                    $agent = new ChatAgent($provider, $fit['instructions'], $sourceCap->wrap($tools), $limits->maxIterations(), $limits->runLimits(max(1, $fit['window'] - $fit['reply_reserve']) + $imageBytesTokens), $token);
-                    $agent->attach(new CallbackObserver(fn (string $event, mixed $data) => $this->observe($runId, $event, $data, $sink)));
-                    $conversation = new Conversation();
-                    foreach ($history as $message) {
-                        $conversation->add($message);
+                    $ask = function (UserMessage $question, int $extraInputTokens) use ($provider, $fit, $sourceCap, $tools, $limits, $token, $runId, $sink, $history, $startedNs): Output {
+                        $elapsed = (hrtime(true) - $startedNs) / 1e9;
+                        $agent = new ChatAgent($provider, $fit['instructions'], $sourceCap->wrap($tools), $limits->maxIterations(), $limits->runLimits(max(1, $fit['window'] - $fit['reply_reserve']) + $extraInputTokens, $elapsed), $token);
+                        $agent->attach(new CallbackObserver(fn (string $event, mixed $data) => $this->observe($runId, $event, $data, $sink)));
+                        $conversation = new Conversation();
+                        foreach ($history as $message) {
+                            $conversation->add($message);
+                        }
+                        return $agent->run($question, $conversation);
+                    };
+                    $output = $ask($question, $imageBytesTokens);
+                    // A provider that refuses image input (no vision, an image it will not take)
+                    // fails before it says anything: ask once more with the text alone, within
+                    // the run's remaining time. A failure after any output is final.
+                    if ($imageBytesTokens > 0 && $output->finishReason === AgentFinishReason::Error && $this->nothingEmitted()
+                        && ! $token->isCancelled() && (hrtime(true) - $startedNs) / 1e9 < $limits->maxRunSeconds()) {
+                        $this->logger->warning("AgentChat: bot run #$runId asks again without images after: ".mb_substr($output->content, 0, self::MAX_TOOL_ERROR, 'UTF-8'));
+                        $imageBytesTokens = 0;
+                        $output = $ask(new UserMessage($questionText), 0);
                     }
-                    $output = $agent->run($question, $conversation);
+                    $imagesUnseen = $images !== [] && $imageBytesTokens === 0;
                     $model = $output->model !== '' ? $output->model : $model;
                 }
             }
@@ -199,6 +216,9 @@ class BotRunner extends Base
             'usage' => ['prompt_tokens' => $usage->promptTokens, 'completion_tokens' => $usage->completionTokens, 'total_tokens' => $usage->totalTokens],
             'asked_by' => ['id' => (string) $askerId, 'name' => (string) (($asker['name'] ?? '') ?: ($asker['username'] ?? '')), 'role' => $budget->roleLabel($askerId, $projectId)],
         ];
+        if ($imagesUnseen) {
+            $metadata['images_unseen'] = true;
+        }
         if ($token->stopRequest() === DbCancellationToken::STOPPED_BY_ASKER && $status === MessageStatus::Stopped) {
             $metadata['stopped_by'] = $metadata['asked_by']['name'];
         }
@@ -206,7 +226,7 @@ class BotRunner extends Base
         // The run row first: when the reaper (or a failed stream) already ended the run, its
         // error stands and the stored message is what the sink gets.
         if ((new RunModel($this->container))->finish($runId, $status->value, $metadata['usage'] + ['finish_reason' => $finishReason, 'duration_ms' => $durationMs] + ($errorCode === null ? [] : ['error_code' => $errorCode]))) {
-            $messages->update((int) $draft['id'], ['parts' => $this->finalParts($runId, $text, $cited), 'status' => $status->value, 'metadata' => $metadata]);
+            $messages->update((int) $draft['id'], ['parts' => $this->finalParts($runId, $text, $cited, $imagesUnseen), 'status' => $status->value, 'metadata' => $metadata]);
         }
 
         $final = $messages->toChatPartsMessage($messages->getById((int) $draft['id']));
@@ -266,7 +286,8 @@ class BotRunner extends Base
 
     /**
      * The question as a php-agents message, with its images when there are any and the resolver
-     * accepts every one (otherwise the text alone, and the log says why), and how many tokens
+     * accepts every one (otherwise the text alone, and the log says why; the answer then says the
+     * bot could not see them), and how many tokens
      * php-agents' bytes / 4 estimate puts on the images' data URIs. The fit already counted each
      * image as ContextBudget::IMAGE_TOKENS, so that many more go on the run's input limit: the
      * limit then holds the text to what the fit allowed instead of refusing any sizeable image.
@@ -422,14 +443,21 @@ class BotRunner extends Base
         ))];
     }
 
+    /** Whether the run has sent the sink nothing yet: no text, reasoning or tool row. */
+    private function nothingEmitted(): bool
+    {
+        return $this->streamed === '' && $this->reasoning === '' && $this->toolParts === [];
+    }
+
     /**
-     * Reasoning, tool rows, the answer, the cited sources. A tool row still running when the
-     * run ended (a stop between call and result) is marked as not run.
+     * Reasoning, tool rows, the answer, a note when the question's images did not reach the
+     * model, the cited sources. A tool row still running when the run ended (a stop between
+     * call and result) is marked as not run.
      *
      * @param list<SourcePart> $sources
      * @return list<Part>
      */
-    private function finalParts(int $runId, string $text, array $sources): array
+    private function finalParts(int $runId, string $text, array $sources, bool $imagesUnseen = false): array
     {
         $parts = [];
         if ($this->reasoning !== '') {
@@ -441,6 +469,9 @@ class BotRunner extends Base
                 : $part;
         }
         $parts[] = new TextPart("r$runId-t1", $text);
+        if ($imagesUnseen) {
+            $parts[] = new TextPart("r$runId-note", '_'.t('The bot could not see the images.').'_');
+        }
         return [...$parts, ...$sources];
     }
 }

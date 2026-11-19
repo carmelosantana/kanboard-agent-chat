@@ -172,10 +172,19 @@ class RoomController extends BaseController
             $files->remove($stored);
             throw $e;
         }
+        $warning = null;
         if ($stored !== []) {
             // Lost a race on client_msg_id: the other request's message (and images) stands.
             $ours = in_array('f'.$stored[0], array_column(json_decode((string) $messages->getById($id)['parts'], true) ?: [], 'id'), true);
-            $ours ? $files->linkToMessage($stored, $id) : $files->remove($stored);
+            if (! $ours) {
+                $files->remove($stored);
+            } elseif (! $files->linkToMessage($stored, $id)) {
+                // The message is out; rather than images nobody can open, it keeps its text alone.
+                $this->logger->error("AgentChat: images of message #$id could not be linked to it.");
+                $files->remove($stored);
+                $messages->update($id, ['parts' => [$text]]);
+                $warning = t('The images could not be attached; the message was sent without them.');
+            }
         }
 
         $turn = null;
@@ -211,6 +220,9 @@ class RoomController extends BaseController
             // A retried send: the answer already exists and streams to the first response only.
             $html .= $this->bubbles($messages, [$messages->getById($turn['message_id'])]);
         }
+        if ($warning !== null) {
+            $html .= new Notice(new KanboardHost($this->container), 'warning', $warning);
+        }
         if ($limit !== null) {
             $this->response->html($html.new Notice(new KanboardHost($this->container), 'warning', $limit), $limitStatus);
             return;
@@ -221,7 +233,10 @@ class RoomController extends BaseController
     /**
      * Stores the checked uploads before their message exists (message_id NULL: no one can read
      * them yet), so the message is created with its FileParts in one write and no poll ever
-     * shows it without its images. Returns the file ids and their parts (root-relative URLs to
+     * shows it without its images. The files are linked right after the insert, in the same
+     * request, so a poll that renders the message between the two statements has its image
+     * requests arrive after the link; if the link fails, send() drops the images and warns.
+     * Returns the file ids and their parts (root-relative URLs to
      * FileController); on a failed write, removes what was written and returns [null, []].
      * Compensation rather than a DB transaction: the blobs live outside the database, and a
      * failed insert inside a Postgres transaction would break create()'s client_msg_id race
