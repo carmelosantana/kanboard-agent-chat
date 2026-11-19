@@ -20,8 +20,8 @@ use Kanboard\Plugin\AiConnector\Model\ModelCatalog;
  * ring and the run use, so the two agree.
  *
  * The window is AiConnector's ModelCatalog::getContextWindow() for the project's profile (its
- * own fallback for a model it does not know); tokens are ModelCatalog::countTokens(). The
- * window fills in this order: instructions, tool definitions, the drawer's task, history (the
+ * own fallback for a model it does not know); tokens are ModelCatalog::countTokens(), never
+ * below php-agents' bytes / 4 (tokens()). The window fills in this order: instructions, tool definitions, the drawer's task, history (the
  * last 40 messages, oldest dropped first), sources (held back for tool results and enforced
  * in the run by SourceCap), the new message with its images (IMAGE_TOKENS each, at most
  * MAX_IMAGES), and the reply reserve (replyReserve(): a quarter of the window, at most
@@ -184,10 +184,14 @@ class ContextBudget extends Base
         );
     }
 
-    /** Estimated tokens of $text for the project's model. */
+    /**
+     * Estimated tokens of $text for the project's model, never below php-agents' own estimate
+     * (bytes / 4, which its maxInputTokens check uses), so the fit never accepts what the run
+     * would refuse. Ring, send check, run and SourceCap all count with this.
+     */
     public function tokens(string $text, int $projectId): int
     {
-        return $this->catalog()->countTokens($text, $this->profile($projectId));
+        return max($this->catalog()->countTokens($text, $this->profile($projectId)), (int) ceil(strlen($text) / 4));
     }
 
     public function author(int $userId): string

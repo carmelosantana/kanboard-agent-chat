@@ -230,6 +230,15 @@ class ContextBudgetTest extends Base
         $this->assertLessThanOrEqual(30, $handler->getNbQueries() - $before, 'profile and authors are looked up once per request, not per row');
     }
 
+    public function testTokensNeverCountBelowPhpAgentsBytesOverFour(): void
+    {
+        $this->model('anthropic', 'claude-sonnet-5-5', 32768);
+        $catalog = new ModelCatalog($this->container);
+
+        $this->assertSame(1500, $this->budget()->tokens(str_repeat('字', 2000), $this->project), '6 000 bytes / 4, above 2 000 characters / 3.5');
+        $this->assertSame($catalog->countTokens(str_repeat('x', 2000), 'p1'), $this->budget()->tokens(str_repeat('x', 2000), $this->project), 'ASCII: the catalog count is the larger');
+    }
+
     public function testHistoryNeverOpensWithTheBotsTurn(): void
     {
         $this->model('anthropic', 'claude-sonnet-5-5', 200000);

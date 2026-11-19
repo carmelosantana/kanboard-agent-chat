@@ -427,6 +427,21 @@ class BotRunnerTest extends Base
         $this->assertSame(['final'], $this->eventNames());
     }
 
+    public function testALongCjkQuestionIsTooLongBeforeThePhpAgentsInputCheck(): void
+    {
+        // 7 000 CJK characters: ~2 000 tokens by characters, but 5 250 by php-agents' bytes / 4,
+        // over the 3 072 input cap of a 4 096 window.
+        $this->window(4096);
+        $runId = $this->ask('@bot '.str_repeat('字', 7000));
+        $provider = new FakeProvider([]);
+
+        $final = $this->runBot($runId, $provider);
+
+        $this->assertSame([], $provider->calls, 'never reaches the provider');
+        $this->assertSame('Your message is too long for this model.', $this->text($final));
+        $this->assertSame('too_long', json_decode($this->runRow($runId)['usage'], true)['error_code']);
+    }
+
     public function testAShortQuestionRunsOnASmallWindow(): void
     {
         $this->window(4096);
