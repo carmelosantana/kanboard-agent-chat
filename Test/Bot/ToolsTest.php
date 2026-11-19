@@ -208,7 +208,6 @@ class ToolsTest extends Base
         $id = $this->task($this->room, 'Fix login');
         $scope = $this->scope();
         $this->container['projectUserRoleModel']->removeUser($this->room, $this->asker);
-        $this->container['memoryCache']->flush();
 
         $this->assertFalse($scope->canReadTask($id));
         $this->assertNotFound($this->tool(GetTaskTool::class, $scope)->execute(['task_id' => $id]));
@@ -263,5 +262,133 @@ class ToolsTest extends Base
         $this->assertStringStartsWith("line one\nline\ttwo[31m", $task['description']);
         $this->assertSame(2000, mb_strlen($task['description'], 'UTF-8'));
         $this->assertStringEndsWith('é…', $task['description']);
+    }
+
+    public function testGetTaskCapsSubtasks(): void
+    {
+        $id = $this->task($this->room, 'Checklist');
+        for ($i = 1; $i <= 60; $i++) {
+            $this->container['subtaskModel']->create(['task_id' => $id, 'title' => "step $i"]);
+        }
+        $this->comment($id, 'only one');
+
+        $data = $this->json($this->tool(GetTaskTool::class)->execute(['task_id' => $id]));
+
+        $this->assertCount(50, $data['task']['subtasks']);
+        $this->assertSame('step 50', $data['task']['subtasks'][49]['title'], 'the first 50 in position order');
+        $this->assertSame(60, $data['task']['subtasks_total']);
+        $this->assertSame(1, $data['task']['comments_total']);
+        $this->assertTrue($data['truncated']);
+    }
+
+    public function testGetTaskFitsTheSizeCap(): void
+    {
+        $id = $this->task($this->room, str_repeat('T', 3000), str_repeat('D', 3000));
+        for ($i = 1; $i <= 60; $i++) {
+            $this->container['subtaskModel']->create(['task_id' => $id, 'title' => str_repeat('s', 3000)]);
+        }
+        for ($i = 1; $i <= 22; $i++) {
+            $this->comment($id, sprintf('%02d', $i).str_repeat('c', 3000));
+        }
+
+        $result = $this->tool(GetTaskTool::class)->execute(['task_id' => $id]);
+        $data = $this->json($result);
+
+        $this->assertLessThanOrEqual(24000, mb_strlen($result->content, 'UTF-8'));
+        $this->assertTrue($data['truncated']);
+        $this->assertSame([], $data['task']['comments'], 'comments go first');
+        $this->assertNotEmpty($data['task']['subtasks']);
+        $this->assertSame([60, 22], [$data['task']['subtasks_total'], $data['task']['comments_total']]);
+        $this->assertSame(1, $data['task']['n']);
+        $this->assertSame(2000, mb_strlen($data['task']['description'], 'UTF-8'));
+
+        // With only comments over the cap, the oldest are dropped and the newest kept.
+        $other = $this->task($this->room, 'Chatty');
+        for ($i = 1; $i <= 20; $i++) {
+            $this->comment($other, sprintf('%02d', $i).str_repeat('c', 3000));
+        }
+        $result = $this->tool(GetTaskTool::class)->execute(['task_id' => $other]);
+        $comments = $this->json($result)['task']['comments'];
+        $this->assertLessThanOrEqual(24000, mb_strlen($result->content, 'UTF-8'));
+        $this->assertGreaterThan(0, count($comments));
+        $this->assertLessThan(20, count($comments));
+        $this->assertStringStartsWith('20', end($comments)['text']);
+    }
+
+    public function testSearchResultsFitTheSizeCap(): void
+    {
+        $id = $this->task($this->room, str_repeat('T', 3000));
+        for ($i = 1; $i <= 10; $i++) {
+            $this->comment($id, 'deploy '.str_repeat('c', 3000));
+        }
+
+        $result = $this->tool(SearchCommentsTool::class)->execute(['query' => 'deploy']);
+        $data = $this->json($result);
+
+        $this->assertLessThanOrEqual(24000, mb_strlen($result->content, 'UTF-8'));
+        $this->assertTrue($data['truncated']);
+        $this->assertSame(10, $data['results_total']);
+        $this->assertGreaterThan(0, count($data['results']));
+        $this->assertLessThan(10, count($data['results']));
+        $this->assertCount(count($data['results']), $this->sources->all(), 'only items shown are numbered');
+    }
+
+    public function testStorageFailureTextNeverReachesTheModel(): void
+    {
+        $logged = [];
+        $logger = $this->createMock(\Psr\Log\LoggerInterface::class);
+        $logger->method('error')->willReturnCallback(function ($message) use (&$logged) {
+            $logged[] = (string) $message;
+        });
+        $this->container['logger'] = $logger;
+        $this->task($this->room, 'Fix login');
+        $this->container['db']->getConnection()->exec('DROP TABLE comments');
+
+        $result = $this->tool(SearchCommentsTool::class)->execute(['query' => 'login']);
+
+        $this->assertSame(ToolResultStatus::Error, $result->status);
+        $this->assertSame('The lookup failed.', $result->content);
+        $this->assertCount(1, $logged);
+        $this->assertStringContainsString('SQLSTATE', $logged[0], 'the real error is logged');
+        $this->assertStringContainsString('search_comments', $logged[0]);
+    }
+
+    public function testLikeMetacharactersMatchNothing(): void
+    {
+        $this->task($this->room, '100% done');
+        $this->task($this->room, 'snake_case');
+        $this->comment($this->task($this->room, 'Other'), '50% off_peak');
+
+        foreach (['%', '_', '%_%', '\\'] as $query) {
+            $this->assertSame([], $this->json($this->tool(SearchTasksTool::class)->execute(['query' => $query]))['results'], $query);
+            $this->assertSame([], $this->json($this->tool(SearchCommentsTool::class)->execute(['query' => $query]))['results'], $query);
+        }
+        $this->assertCount(1, $this->json($this->tool(SearchTasksTool::class)->execute(['query' => '100%']))['results'], 'the word still matches');
+    }
+
+    public function testGroupMemberReadsUntilRemovedFromTheGroup(): void
+    {
+        $id = $this->task($this->room, 'Fix login');
+        $gus = $this->user('gus');
+        $group = (int) $this->container['groupModel']->create('Team');
+        $this->container['groupMemberModel']->addUser($group, $gus);
+        $this->container['projectGroupRoleModel']->addGroup($this->room, $group, Role::PROJECT_MEMBER);
+        $scope = $this->scope($gus);
+
+        $this->assertTrue($scope->canReadTask($id));
+        $this->assertSame($id, $this->json($this->tool(GetTaskTool::class, $scope)->execute(['task_id' => $id]))['task']['task_id']);
+
+        $this->container['groupMemberModel']->removeUser($group, $gus);
+        $this->assertNotFound($this->tool(GetTaskTool::class, $scope)->execute(['task_id' => $id]));
+        $this->assertNotFound($this->tool(SearchTasksTool::class, $scope)->execute(['query' => 'login']));
+    }
+
+    public function testInactiveAskerGetsNotFound(): void
+    {
+        $id = $this->task($this->room, 'Fix login');
+        $scope = $this->scope();
+        $this->container['userModel']->disable($this->asker);
+
+        $this->assertNotFound($this->tool(GetTaskTool::class, $scope)->execute(['task_id' => $id]));
     }
 }

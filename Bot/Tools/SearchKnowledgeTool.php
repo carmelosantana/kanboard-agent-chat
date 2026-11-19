@@ -38,16 +38,16 @@ class SearchKnowledgeTool extends ReadOnlyTool
     {
         $hits = (new KnowledgeModel($this->scope->container()))->search($this->scope->projectId, $input['query'], $input['source'] ?? null, $input['limit'] ?? self::MAX_LIMIT);
 
-        return $this->result(['results' => array_map(function (array $hit): array {
+        return $this->listResult(array_map(function (array $hit): array {
             $title = self::text($hit['title']);
             return [
-                'n' => $this->sources->register('knowledge', (string) $hit['id'], $title, $this->url('KnowledgeController', 'show', ['id' => $hit['id'], 'plugin' => 'AgentChat'])),
-                'knowledge_id' => $hit['id'],
+                'n' => self::source('knowledge', $hit['id'], $title, $this->url('KnowledgeController', 'show', ['id' => $hit['id'], 'plugin' => 'AgentChat'])),
+                'knowledge_id' => (int) $hit['id'],
                 'title' => $title,
                 'source' => self::text($hit['source']),
                 'date' => self::date($hit['occurred_at']),
                 'snippet' => self::text($hit['snippet']),
             ];
-        }, $hits)]);
+        }, $hits));
     }
 }

@@ -62,11 +62,11 @@ class SearchCommentsTool extends ReadOnlyTool
             ->limit($input['limit'] ?? self::MAX_LIMIT)
             ->findAll();
 
-        return $this->result(['results' => array_map(function (array $row): array {
+        return $this->listResult(array_map(function (array $row): array {
             $taskTitle = self::text($row['task_title']);
             $url = $this->url('TaskViewController', 'show', ['task_id' => $row['task_id'], 'project_id' => $this->scope->projectId], 'comment-'.$row['id']);
             return [
-                'n' => $this->sources->register('comment', (string) $row['id'], self::text('Comment on '.$row['task_title']), $url),
+                'n' => self::source('comment', $row['id'], self::text('Comment on '.$row['task_title']), $url),
                 'comment_id' => (int) $row['id'],
                 'task_id' => (int) $row['task_id'],
                 'task_title' => $taskTitle,
@@ -74,6 +74,6 @@ class SearchCommentsTool extends ReadOnlyTool
                 'created' => self::date($row['date_creation']),
                 'text' => self::text($row['comment']),
             ];
-        }, $rows)]);
+        }, $rows));
     }
 }

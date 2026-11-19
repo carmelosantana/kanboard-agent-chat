@@ -73,10 +73,10 @@ class SearchTasksTool extends ReadOnlyTool
             ->limit($input['limit'] ?? self::MAX_LIMIT)
             ->findAll();
 
-        return $this->result(['results' => array_map(function (array $row): array {
+        return $this->listResult(array_map(function (array $row): array {
             $title = self::text($row['title']);
             return [
-                'n' => $this->sources->register('task', (string) $row['id'], $title, $this->url('TaskViewController', 'show', ['task_id' => $row['id'], 'project_id' => $this->scope->projectId])),
+                'n' => self::source('task', $row['id'], $title, $this->url('TaskViewController', 'show', ['task_id' => $row['id'], 'project_id' => $this->scope->projectId])),
                 'task_id' => (int) $row['id'],
                 'title' => $title,
                 'status' => (int) $row['is_active'] === TaskModel::STATUS_OPEN ? 'open' : 'closed',
@@ -84,6 +84,6 @@ class SearchTasksTool extends ReadOnlyTool
                 'assignee' => self::text($row['assignee_name'] ?: $row['assignee_username']),
                 'updated' => self::date($row['date_modification']),
             ];
-        }, $rows)]);
+        }, $rows));
     }
 }
