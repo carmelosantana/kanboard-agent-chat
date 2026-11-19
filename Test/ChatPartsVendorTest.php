@@ -1,10 +1,8 @@
 <?php
-require_once 'tests/units/Base.php';
-
-use KanboardTests\units\Base;
+use PHPUnit\Framework\TestCase;
 
 // vendor-chatparts/ is a hash-checked copy (scripts/sync-chatparts.sh): every file matches CHECKSUMS, nothing extra.
-class ChatPartsVendorTest extends Base
+class ChatPartsVendorTest extends TestCase
 {
     public function testVendoredFilesMatchChecksums(): void
     {

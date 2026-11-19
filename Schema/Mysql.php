@@ -5,6 +5,10 @@ const VERSION = 1;
 
 // utf8mb4 (not core's utf8) so chat text keeps emoji; opaque ids (client_msg_id, source, external_id)
 // use utf8mb4_bin so UNIQUE matches exactly, as on SQLite and Postgres. TEXT columns carry no DEFAULT.
+// UNIQUE keys share their names with the other dialects' unique indexes. MySQL has no partial
+// index, so agentchat_rooms_project_uidx covers every kind here (SQLite/Postgres: kind = 'project'
+// only); v2 room kinds must keep (kind, project_id) unique or drop this key. Each foreign key has
+// its own index, so no UNIQUE key is pinned by "needed in a foreign key constraint".
 function version_1($pdo)
 {
     $pdo->exec('CREATE TABLE IF NOT EXISTS agentchat_rooms (
@@ -14,7 +18,7 @@ function version_1($pdo)
         name VARCHAR(255) NOT NULL DEFAULT \'\',
         created_at BIGINT NOT NULL DEFAULT 0,
         PRIMARY KEY(id),
-        UNIQUE KEY agentchat_rooms_kind_project (kind, project_id),
+        UNIQUE KEY agentchat_rooms_project_uidx (kind, project_id),
         FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE CASCADE
     ) ENGINE=InnoDB CHARSET=utf8mb4');
 
@@ -35,7 +39,7 @@ function version_1($pdo)
         created_at BIGINT NOT NULL DEFAULT 0,
         updated_at BIGINT NOT NULL DEFAULT 0,
         PRIMARY KEY(id),
-        UNIQUE KEY agentchat_messages_client_msg (room_id, sender_kind, sender_id, client_msg_id),
+        UNIQUE KEY agentchat_messages_client_msg_uidx (room_id, sender_kind, sender_id, client_msg_id),
         KEY agentchat_messages_room_id_idx (room_id, id),
         KEY agentchat_messages_private_task_idx (private_to, task_id),
         FOREIGN KEY(room_id) REFERENCES agentchat_rooms(id) ON DELETE CASCADE
@@ -53,7 +57,7 @@ function version_1($pdo)
         finished_at BIGINT NULL,
         `usage` TEXT NULL,
         PRIMARY KEY(id),
-        UNIQUE KEY agentchat_runs_stream_token_hash (stream_token_hash),
+        UNIQUE KEY agentchat_runs_stream_token_uidx (stream_token_hash),
         FOREIGN KEY(message_id) REFERENCES agentchat_messages(id) ON DELETE CASCADE,
         FOREIGN KEY(room_id) REFERENCES agentchat_rooms(id) ON DELETE CASCADE
     ) ENGINE=InnoDB CHARSET=utf8mb4');
@@ -88,7 +92,8 @@ function version_1($pdo)
         created_at BIGINT NOT NULL DEFAULT 0,
         updated_at BIGINT NOT NULL DEFAULT 0,
         PRIMARY KEY(id),
-        UNIQUE KEY agentchat_knowledge_source (project_id, source, external_id),
+        UNIQUE KEY agentchat_knowledge_source_uidx (project_id, source, external_id),
+        KEY agentchat_knowledge_project_idx (project_id),
         FULLTEXT KEY ft_title_body (title, body),
         FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE CASCADE
     ) ENGINE=InnoDB CHARSET=utf8mb4');

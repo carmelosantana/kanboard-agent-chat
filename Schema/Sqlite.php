@@ -3,6 +3,9 @@ namespace Kanboard\Plugin\AgentChat\Schema;
 
 const VERSION = 1;
 
+// UNIQUE keys are named indexes, never inline constraints: SQLite cannot drop an inline UNIQUE
+// without rebuilding the table, and rebuilding a parent table inside Kanboard's migration
+// transaction cascades (foreign_keys=OFF is ignored there) and would delete its children.
 function version_1($pdo)
 {
     $pdo->exec('CREATE TABLE IF NOT EXISTS agentchat_rooms (
@@ -11,9 +14,9 @@ function version_1($pdo)
         project_id INTEGER NULL,
         name VARCHAR(255) NOT NULL DEFAULT \'\',
         created_at INTEGER NOT NULL DEFAULT 0,
-        UNIQUE(kind, project_id),
         FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE CASCADE
     )');
+    $pdo->exec('CREATE UNIQUE INDEX IF NOT EXISTS agentchat_rooms_project_uidx ON agentchat_rooms(kind, project_id) WHERE kind = \'project\'');
 
     $pdo->exec('CREATE TABLE IF NOT EXISTS agentchat_messages (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -31,9 +34,9 @@ function version_1($pdo)
         task_id INTEGER NULL,
         created_at INTEGER NOT NULL DEFAULT 0,
         updated_at INTEGER NOT NULL DEFAULT 0,
-        UNIQUE(room_id, sender_kind, sender_id, client_msg_id),
         FOREIGN KEY(room_id) REFERENCES agentchat_rooms(id) ON DELETE CASCADE
     )');
+    $pdo->exec('CREATE UNIQUE INDEX IF NOT EXISTS agentchat_messages_client_msg_uidx ON agentchat_messages(room_id, sender_kind, sender_id, client_msg_id)');
     $pdo->exec('CREATE INDEX IF NOT EXISTS agentchat_messages_room_id_idx ON agentchat_messages(room_id, id)');
     $pdo->exec('CREATE INDEX IF NOT EXISTS agentchat_messages_private_task_idx ON agentchat_messages(private_to, task_id)');
 
@@ -42,7 +45,7 @@ function version_1($pdo)
         message_id INTEGER NOT NULL,
         room_id INTEGER NOT NULL,
         asked_by INTEGER NOT NULL,
-        stream_token_hash VARCHAR(64) NOT NULL UNIQUE,
+        stream_token_hash VARCHAR(64) NOT NULL,
         status VARCHAR(16) NOT NULL DEFAULT \'pending\',
         stop_requested INTEGER NOT NULL DEFAULT 0,
         started_at INTEGER NULL,
@@ -51,6 +54,7 @@ function version_1($pdo)
         FOREIGN KEY(message_id) REFERENCES agentchat_messages(id) ON DELETE CASCADE,
         FOREIGN KEY(room_id) REFERENCES agentchat_rooms(id) ON DELETE CASCADE
     )');
+    $pdo->exec('CREATE UNIQUE INDEX IF NOT EXISTS agentchat_runs_stream_token_uidx ON agentchat_runs(stream_token_hash)');
 
     $pdo->exec('CREATE TABLE IF NOT EXISTS agentchat_files (
         id INTEGER PRIMARY KEY,
@@ -80,9 +84,9 @@ function version_1($pdo)
         metadata TEXT NULL,
         created_at INTEGER NOT NULL DEFAULT 0,
         updated_at INTEGER NOT NULL DEFAULT 0,
-        UNIQUE(project_id, source, external_id),
         FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE CASCADE
     )');
+    $pdo->exec('CREATE UNIQUE INDEX IF NOT EXISTS agentchat_knowledge_source_uidx ON agentchat_knowledge(project_id, source, external_id)');
 
     // FTS5 external-content index over title and body, kept in step by triggers.
     $pdo->exec('CREATE VIRTUAL TABLE IF NOT EXISTS agentchat_knowledge_fts USING fts5(

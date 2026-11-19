@@ -10,7 +10,7 @@ project's knowledge.
 
 Unzip `AgentChat-<version>.zip` into `plugins/AgentChat/` (the zip's single top-level folder is
 `AgentChat`). The tables are created on first load. Requires Kanboard `>=1.2.47` and PHP `>=8.4`, and
-works on SQLite, MySQL/MariaDB and Postgres.
+works on SQLite, MySQL/MariaDB and Postgres 12 or later (knowledge search uses a generated column).
 
 ## Recommended plugins
 
@@ -34,6 +34,10 @@ and agents; the bot is simply not offered.
 | `agentchat_knowledge` | searchable project knowledge, with full-text search (SQLite FTS5, MySQL FULLTEXT, Postgres tsvector) |
 
 Deleting a project deletes its room, messages, runs, files rows and knowledge.
+
+Knowledge search uses each database's own full-text engine, so results can differ by dialect: SQLite
+FTS5 (`unicode61` tokens), MySQL/MariaDB InnoDB FULLTEXT (words under 3 characters and its stopwords
+are not indexed) and Postgres `simple` text search (no stemming).
 
 ## chatparts
 

@@ -7,6 +7,15 @@ class SchemaTest extends Base
 {
     private const TABLES = ['agentchat_rooms', 'agentchat_messages', 'agentchat_runs', 'agentchat_files', 'agentchat_knowledge'];
 
+    // Every UNIQUE is a named index with the same name in all three dialects, so a later
+    // version can drop it with one statement (an inline SQLite UNIQUE can only go by a table rebuild).
+    private const UNIQUE_INDEXES = [
+        'agentchat_rooms_project_uidx' => 'agentchat_rooms',
+        'agentchat_messages_client_msg_uidx' => 'agentchat_messages',
+        'agentchat_runs_stream_token_uidx' => 'agentchat_runs',
+        'agentchat_knowledge_source_uidx' => 'agentchat_knowledge',
+    ];
+
     protected function setUp(): void
     {
         parent::setUp();
@@ -16,7 +25,7 @@ class SchemaTest extends Base
         $this->container['db']->table('projects')->insert(['name' => 'Chat', 'is_active' => 1]);
     }
 
-    public function testSqliteCreatesAllTables(): void
+    public function testVersion1CreatesAllTablesInThisDialect(): void
     {
         $db = $this->container['db'];
         $now = time();
@@ -82,10 +91,55 @@ class SchemaTest extends Base
         $this->assertSame([], $this->search('carousel'));
     }
 
+    public function testRunningVersion1TwiceIsANoOp(): void
+    {
+        $db = $this->container['db'];
+        $roomId = $db->table('agentchat_rooms')->persist(['kind' => 'project', 'project_id' => 1, 'name' => 'Chat', 'created_at' => 1]);
+
+        \Kanboard\Plugin\AgentChat\Schema\version_1($db->getConnection());
+
+        $this->assertSame(1, $db->table('agentchat_rooms')->count());
+        $this->assertSame('Chat', $db->table('agentchat_rooms')->eq('id', $roomId)->findOneColumn('name'));
+    }
+
+    public function testOneProjectRoomPerProjectButOtherKindsAreFree(): void
+    {
+        $db = $this->container['db'];
+        $room = ['kind' => 'project', 'project_id' => 1, 'name' => 'Chat', 'created_at' => 1];
+        $this->assertTrue($db->table('agentchat_rooms')->insert($room));
+        $this->assertFalse($db->table('agentchat_rooms')->insert($room));
+        // Rooms without a project (v2 team, dm) never collide.
+        $this->assertTrue($db->table('agentchat_rooms')->insert(['kind' => 'team', 'project_id' => null] + $room));
+        $this->assertTrue($db->table('agentchat_rooms')->insert(['kind' => 'team', 'project_id' => null] + $room));
+        // The rule binds only kind = 'project' (partial index); MySQL has no partial index, so there
+        // (kind, project_id) is unique for every kind.
+        $this->assertTrue($db->table('agentchat_rooms')->insert(['kind' => 'team'] + $room));
+        $this->assertSame(DB_DRIVER !== 'mysql', $db->table('agentchat_rooms')->insert(['kind' => 'team'] + $room));
+    }
+
+    public function testUniqueKeysAreNamedIndexesALaterVersionCanDrop(): void
+    {
+        $pdo = $this->container['db']->getConnection();
+        foreach (self::UNIQUE_INDEXES as $index => $table) {
+            $pdo->exec(DB_DRIVER === 'mysql' ? "DROP INDEX $index ON $table" : "DROP INDEX $index");
+        }
+        // With the keys gone, duplicates go in: nothing else was enforcing them.
+        $db = $this->container['db'];
+        $room = ['kind' => 'project', 'project_id' => 1, 'name' => 'Chat', 'created_at' => 1];
+        $this->assertTrue($db->table('agentchat_rooms')->insert($room));
+        $this->assertTrue($db->table('agentchat_rooms')->insert($room));
+    }
+
     public function testAllThreeDialectsDeclareVersion1(): void
     {
         foreach (['Sqlite', 'Mysql', 'Postgres'] as $d) {
-            $src = file_get_contents(__DIR__."/../Schema/$d.php");
+            $file = __DIR__."/../Schema/$d.php";
+            exec(escapeshellarg(PHP_BINARY).' -l '.escapeshellarg($file).' 2>&1', $out, $code);
+            $this->assertSame(0, $code, "$d: ".implode("\n", $out));
+            $src = file_get_contents($file);
+            foreach (array_keys(self::UNIQUE_INDEXES) as $index) {
+                $this->assertStringContainsString($index, $src, "$d: $index");
+            }
             $this->assertStringContainsString('const VERSION = 1;', $src, $d);
             $this->assertStringContainsString('function version_1', $src, $d);
             foreach (self::TABLES as $t) {

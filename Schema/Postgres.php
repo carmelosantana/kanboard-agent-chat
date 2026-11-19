@@ -3,6 +3,7 @@ namespace Kanboard\Plugin\AgentChat\Schema;
 
 const VERSION = 1;
 
+// UNIQUE keys are named unique indexes (same names in every dialect) so a later version can drop them.
 function version_1($pdo)
 {
     $pdo->exec('CREATE TABLE IF NOT EXISTS agentchat_rooms (
@@ -10,9 +11,9 @@ function version_1($pdo)
         kind VARCHAR(16) NOT NULL DEFAULT \'project\',
         project_id INTEGER NULL REFERENCES projects(id) ON DELETE CASCADE,
         name VARCHAR(255) NOT NULL DEFAULT \'\',
-        created_at BIGINT NOT NULL DEFAULT 0,
-        UNIQUE(kind, project_id)
+        created_at BIGINT NOT NULL DEFAULT 0
     )');
+    $pdo->exec('CREATE UNIQUE INDEX IF NOT EXISTS agentchat_rooms_project_uidx ON agentchat_rooms(kind, project_id) WHERE kind = \'project\'');
 
     $pdo->exec('CREATE TABLE IF NOT EXISTS agentchat_messages (
         id SERIAL PRIMARY KEY,
@@ -29,9 +30,9 @@ function version_1($pdo)
         reply_to INTEGER NULL,
         task_id INTEGER NULL,
         created_at BIGINT NOT NULL DEFAULT 0,
-        updated_at BIGINT NOT NULL DEFAULT 0,
-        UNIQUE(room_id, sender_kind, sender_id, client_msg_id)
+        updated_at BIGINT NOT NULL DEFAULT 0
     )');
+    $pdo->exec('CREATE UNIQUE INDEX IF NOT EXISTS agentchat_messages_client_msg_uidx ON agentchat_messages(room_id, sender_kind, sender_id, client_msg_id)');
     $pdo->exec('CREATE INDEX IF NOT EXISTS agentchat_messages_room_id_idx ON agentchat_messages(room_id, id)');
     $pdo->exec('CREATE INDEX IF NOT EXISTS agentchat_messages_private_task_idx ON agentchat_messages(private_to, task_id)');
 
@@ -40,13 +41,14 @@ function version_1($pdo)
         message_id INTEGER NOT NULL REFERENCES agentchat_messages(id) ON DELETE CASCADE,
         room_id INTEGER NOT NULL REFERENCES agentchat_rooms(id) ON DELETE CASCADE,
         asked_by INTEGER NOT NULL,
-        stream_token_hash VARCHAR(64) NOT NULL UNIQUE,
+        stream_token_hash VARCHAR(64) NOT NULL,
         status VARCHAR(16) NOT NULL DEFAULT \'pending\',
-        stop_requested BOOLEAN NOT NULL DEFAULT FALSE,
+        stop_requested SMALLINT NOT NULL DEFAULT 0,
         started_at BIGINT NULL,
         finished_at BIGINT NULL,
         usage TEXT NULL
     )');
+    $pdo->exec('CREATE UNIQUE INDEX IF NOT EXISTS agentchat_runs_stream_token_uidx ON agentchat_runs(stream_token_hash)');
 
     $pdo->exec('CREATE TABLE IF NOT EXISTS agentchat_files (
         id SERIAL PRIMARY KEY,
@@ -75,8 +77,8 @@ function version_1($pdo)
         metadata TEXT NULL,
         created_at BIGINT NOT NULL DEFAULT 0,
         updated_at BIGINT NOT NULL DEFAULT 0,
-        search tsvector GENERATED ALWAYS AS (to_tsvector(\'simple\'::regconfig, coalesce(title, \'\') || \' \' || coalesce(body, \'\'))) STORED,
-        UNIQUE(project_id, source, external_id)
+        search tsvector GENERATED ALWAYS AS (to_tsvector(\'simple\'::regconfig, coalesce(title, \'\') || \' \' || coalesce(body, \'\'))) STORED
     )');
+    $pdo->exec('CREATE UNIQUE INDEX IF NOT EXISTS agentchat_knowledge_source_uidx ON agentchat_knowledge(project_id, source, external_id)');
     $pdo->exec('CREATE INDEX IF NOT EXISTS agentchat_knowledge_search_idx ON agentchat_knowledge USING GIN (search)');
 }
