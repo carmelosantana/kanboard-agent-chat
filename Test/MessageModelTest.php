@@ -9,6 +9,7 @@ use ChatParts\Model\Part\SourcePart;
 use ChatParts\Model\Part\TextPart;
 use Kanboard\Plugin\AgentChat\Model\MessageModel;
 use Kanboard\Plugin\AgentChat\Model\RoomModel;
+use PHPUnit\Framework\Attributes\DataProvider;
 
 class MessageModelTest extends Base
 {
@@ -160,6 +161,7 @@ class MessageModelTest extends Base
     }
 
     /** @dataProvider invalidOptions */
+    #[DataProvider('invalidOptions')]
     public function testCreateRejectsInvalidOptions(array $opts): void
     {
         $this->expectException(InvalidArgumentException::class);
