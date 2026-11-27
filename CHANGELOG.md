@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.2.0 — Unreleased
+## 0.2.0 — 2026-11-27
 
 - The project bot uses AiConnector's model routing: AgentChat registers the AI feature
   `agentchat.bot` ("Chat bot"), and the bot answers on the profile AiConnector resolves for the
