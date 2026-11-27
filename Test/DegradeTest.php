@@ -44,6 +44,7 @@ class DegradeTest extends Base
         // AiConnector is configured: only its absence (below) closes the gate.
         $this->container['configModel']->save([
             'aiconnector_profiles' => json_encode([['id' => 'p1', 'label' => 'Test', 'provider' => 'anthropic', 'model' => 'claude-sonnet-5-5']]),
+            'aiconnector_default' => 'p1',
             'aiconnector_key_p1' => 'sk-test-fake-key',
         ]);
 

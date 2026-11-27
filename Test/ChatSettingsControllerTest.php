@@ -86,17 +86,22 @@ class ChatSettingsControllerTest extends Base
         return new ProjectSettings($this->container, $this->project);
     }
 
+    /** The removed bot profile setting, as stored metadata (or null when absent). */
+    private function storedBotProfile(): ?string
+    {
+        return $this->container['projectMetadataModel']->getAll($this->project)['agentchat_ai_profile'] ?? null;
+    }
+
     public function testMemberCannotChangeProjectSettings(): void
     {
         $this->loginAs($this->member);
         try {
-            $this->call('saveProject', ['project_id' => $this->project], ['ask_role' => 'everyone', 'ai_profile' => 'p2']);
+            $this->call('saveProject', ['project_id' => $this->project], ['ask_role' => 'everyone']);
             $this->fail('a member may not change the settings');
         } catch (AccessForbiddenException) {
         }
         $this->assertSame('members', $this->settings()->askRole());
         $this->assertTrue($this->settings()->botEnabled());
-        $this->assertNull($this->settings()->aiProfile());
 
         $this->expectException(AccessForbiddenException::class);
         $this->call('project', ['project_id' => $this->project]);
@@ -109,41 +114,52 @@ class ChatSettingsControllerTest extends Base
         $page = $this->call('project', ['project_id' => $this->project]);
         $this->assertSame(200, $page['status']);
         $this->assertStringContainsString('name="ask_role"', $page['body']);
-        $this->assertStringContainsString('value="p1"', $page['body']);
-        $this->assertStringContainsString('value="p2"', $page['body']);
         $this->assertStringContainsString('name="bot_images"', $page['body']);
 
         // Unchecked boxes are absent from the post: both switch off.
-        $out = $this->call('saveProject', ['project_id' => $this->project], ['ask_role' => 'managers', 'ai_profile' => 'p2']);
+        $out = $this->call('saveProject', ['project_id' => $this->project], ['ask_role' => 'managers']);
 
         $this->assertSame(302, $out['status']);
         $this->assertFalse($this->settings()->botEnabled());
         $this->assertFalse($this->settings()->botImages());
         $this->assertSame('managers', $this->settings()->askRole());
-        $this->assertSame('p2', $this->settings()->aiProfile());
 
-        $this->call('saveProject', ['project_id' => $this->project], ['bot_enabled' => '1', 'bot_images' => '1', 'ask_role' => 'everyone', 'ai_profile' => '']);
+        $this->call('saveProject', ['project_id' => $this->project], ['bot_enabled' => '1', 'bot_images' => '1', 'ask_role' => 'everyone']);
         $this->assertTrue($this->settings()->botEnabled());
         $this->assertTrue($this->settings()->botImages());
-        $this->assertNull($this->settings()->aiProfile(), 'empty: AiConnector\'s default profile');
     }
 
-    public function testInvalidProfileRejected(): void
+    // The bot's model comes from AiConnector's routing (agentchat.bot): no profile field here.
+    public function testTheFormHasNoAiProfileAndAPostedOneIsIgnored(): void
+    {
+        $this->container['projectMetadataModel']->save($this->project, ['agentchat_ai_profile' => 'p1']);
+        $this->loginAs($this->manager);
+
+        $page = $this->call('project', ['project_id' => $this->project]);
+        $this->assertStringNotContainsString('ai_profile', $page['body']);
+        $this->assertStringNotContainsString('value="p2"', $page['body']);
+
+        foreach (['p2', 'nope', ['p1'], ''] as $posted) {
+            $out = $this->call('saveProject', ['project_id' => $this->project], ['bot_enabled' => '1', 'ask_role' => 'managers', 'ai_profile' => $posted]);
+            $this->assertSame(302, $out['status'], json_encode($posted).' is ignored, not refused');
+        }
+        $this->assertSame('managers', $this->settings()->askRole());
+        $this->assertSame('p1', $this->storedBotProfile(), 'stored values are left in place, untouched');
+    }
+
+    public function testInvalidAskRoleRejected(): void
     {
         $this->loginAs($this->manager);
 
-        foreach ([['ai_profile' => 'nope'], ['ai_profile' => ['p1']], ['ask_role' => 'admins']] as $bad) {
-            $out = $this->call('saveProject', ['project_id' => $this->project], $bad + ['bot_enabled' => '0', 'ask_role' => 'managers', 'ai_profile' => 'p1']);
+        $out = $this->call('saveProject', ['project_id' => $this->project], ['bot_enabled' => '0', 'ask_role' => 'admins']);
 
-            $this->assertSame(400, $out['status'], json_encode($bad));
-            $this->assertStringContainsString('name="ask_role"', $out['body'], 'the form again, with the error');
-        }
+        $this->assertSame(400, $out['status']);
+        $this->assertStringContainsString('name="ask_role"', $out['body'], 'the form again, with the error');
         $this->assertTrue($this->settings()->botEnabled(), 'nothing saved');
         $this->assertSame('members', $this->settings()->askRole());
-        $this->assertNull($this->settings()->aiProfile());
     }
 
-    public function testWithoutAiConnectorTheProfileFieldIsHidden(): void
+    public function testWithoutAiConnectorTheBotIsShownUnavailable(): void
     {
         $this->container[AiGate::CONNECTOR_OVERRIDE] = false;
         $this->loginAs($this->manager);
@@ -153,6 +169,19 @@ class ChatSettingsControllerTest extends Base
         $this->assertSame(200, $page['status']);
         $this->assertStringNotContainsString('name="ai_profile"', $page['body']);
         $this->assertStringContainsString('The project bot is unavailable', $page['body']);
+    }
+
+    public function testNoReadyRouteForTheProjectShowsTheBotUnavailable(): void
+    {
+        // p1 has a key but is not the default, so AiConnector routes the bot nowhere.
+        $this->loginAs($this->manager);
+        $page = $this->call('project', ['project_id' => $this->project]);
+        $this->assertStringContainsString('The project bot is unavailable', $page['body']);
+
+        $this->container['configModel']->save(['aiconnector_default' => 'p1']);
+        $this->container['memoryCache']->flush();
+        $page = $this->call('project', ['project_id' => $this->project]);
+        $this->assertStringNotContainsString('The project bot is unavailable', $page['body']);
     }
 
     public function testLimitsMustBePositive(): void

@@ -10,7 +10,7 @@ class PluginVersionTest extends Base
     public function testVersionsAgree(): void
     {
         $json = json_decode(file_get_contents(__DIR__.'/../plugin.json'), true);
-        $this->assertSame('0.1.0', $json['version']);
+        $this->assertSame('0.2.0', $json['version']);
         $this->assertSame($json['version'], (new Plugin($this->container))->getPluginVersion());
         $this->assertSame('AgentChat', $json['name']);
         $this->assertSame('AgentChat', (new Plugin($this->container))->getPluginName());
@@ -30,7 +30,7 @@ class PluginVersionTest extends Base
         $json = json_decode(file_get_contents(__DIR__.'/../plugin.json'), true);
         $this->assertSame([], $json['requires']);
         $this->assertSame([
-            ['plugin' => 'AiConnector', 'min_version' => '1.2.0', 'reason' => 'Project bot answers'],
+            ['plugin' => 'AiConnector', 'min_version' => '1.4.0', 'reason' => 'Project bot answers'],
             ['plugin' => 'Agents', 'min_version' => '0.5.0', 'reason' => 'Agent badges'],
         ], $json['recommends']);
     }

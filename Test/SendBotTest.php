@@ -42,6 +42,7 @@ class SendBotTest extends Base
         require_once dirname(__DIR__, 2).'/AiConnector/vendor/autoload.php';
         $this->container['configModel']->save([
             'aiconnector_profiles' => json_encode([['id' => 'p1', 'label' => 'Test', 'provider' => 'anthropic', 'model' => 'claude-sonnet-5-5']]),
+            'aiconnector_default' => 'p1',
             'aiconnector_key_p1' => 'sk-test-fake-key',
         ]);
 

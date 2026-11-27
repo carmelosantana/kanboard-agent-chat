@@ -18,11 +18,6 @@
             'everyone' => t('Everyone with access, viewers included'),
         ], $values, $errors) ?>
 
-        <?php if ($profiles !== null): ?>
-            <?= $this->form->label(t('AI profile'), 'ai_profile') ?>
-            <?= $this->form->select('ai_profile', ['' => t('AiConnector\'s default')] + $profiles, $values, $errors) ?>
-        <?php endif ?>
-
         <?= $this->form->checkbox('bot_images', t('Send images to the bot'), 1, (bool) $values['bot_images']) ?>
         <p class="form-help"><?= t('Images always stay in the chat for people; with this off the bot answers from the text alone.') ?></p>
     </fieldset>

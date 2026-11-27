@@ -8,8 +8,10 @@ use Kanboard\Plugin\AiConnector\Plugin as AiConnectorPlugin;
 /**
  * AiGate: the single answer to "can the project bot run?".
  *
- * Gate = PHP >= 8.4 AND AiConnector present AND AiConnector >= MIN_CONNECTOR_VERSION
- * AND php-agents has RunLimits (0.17+) AND ProviderRegistry::isReady(). Any exception closes it.
+ * Gate = PHP >= 8.4 AND AiConnector present AND AiConnector >= MIN_CONNECTOR_VERSION with its
+ * routing API (ProviderRegistry::resolve) AND php-agents has RunLimits (0.17+) AND
+ * ProviderRegistry::isReady(). Any exception closes it. For a project, the gate also needs
+ * AiConnector's routing to name a ready profile for the bot (FEATURE): botProfile().
  *
  * Ask it at request time, not in Plugin::initialize(): RunLimits comes from AiConnector's
  * vendor autoload, which AiConnector registers in its own initialize(), and Kanboard gives no
@@ -22,7 +24,9 @@ use Kanboard\Plugin\AiConnector\Plugin as AiConnectorPlugin;
  */
 final class AiGate
 {
-    public const MIN_CONNECTOR_VERSION = '1.2.0';
+    public const MIN_CONNECTOR_VERSION = '1.4.0';
+    /** The bot's AiConnector feature id, registered on aiconnector:features. */
+    public const FEATURE = 'agentchat.bot';
     public const CONNECTOR_OVERRIDE = 'agentchat.ai_connector_present';
 
     public static function isReady(
@@ -30,23 +34,25 @@ final class AiGate
         ?int $phpVersionId = null,
         ?bool $connectorPresent = null,
         ?string $connectorVersion = null,
-        ?bool $runLimitsPresent = null
+        ?bool $runLimitsPresent = null,
+        ?bool $routingPresent = null
     ): bool {
         try {
-            return self::isInstalled($container, $phpVersionId, $connectorPresent, $connectorVersion, $runLimitsPresent)
+            return self::isInstalled($container, $phpVersionId, $connectorPresent, $connectorVersion, $runLimitsPresent, $routingPresent)
                 && (new ProviderRegistry($container))->isReady();
         } catch (\Throwable $e) {
             return false;
         }
     }
 
-    /** AiConnector is there, new enough, on PHP 8.4+, with php-agents' RunLimits; providers aside. */
+    /** AiConnector is there, new enough and routing, on PHP 8.4+, with php-agents' RunLimits; providers aside. */
     public static function isInstalled(
         $container,
         ?int $phpVersionId = null,
         ?bool $connectorPresent = null,
         ?string $connectorVersion = null,
-        ?bool $runLimitsPresent = null
+        ?bool $runLimitsPresent = null,
+        ?bool $routingPresent = null
     ): bool {
         try {
             if (($phpVersionId ?? PHP_VERSION_ID) < 80400) {
@@ -57,6 +63,9 @@ final class AiGate
             }
             $version = $connectorVersion ?? self::installedConnectorVersion($container);
             if ($version === null || version_compare($version, self::MIN_CONNECTOR_VERSION, '<')) {
+                return false;
+            }
+            if (! ($routingPresent ?? self::routingPresent())) {
                 return false;
             }
             return $runLimitsPresent ?? class_exists(\CarmeloSantana\PHPAgents\Agent\RunLimits::class);
@@ -73,10 +82,38 @@ final class AiGate
             : class_exists(ProviderRegistry::class);
     }
 
-    /** The gate is open and the project has its bot switched on. */
+    /**
+     * The profile id AiConnector routes the project's bot to, or '' when none is ready (or
+     * AiConnector, or its routing API, is missing). The only source of the bot's profile.
+     */
+    public static function botProfile($container, int $projectId): string
+    {
+        try {
+            if (! self::connectorPresent($container) || ! self::routingPresent()) {
+                return '';
+            }
+            return (new ProviderRegistry($container))->resolve(self::FEATURE, $projectId);
+        } catch (\Throwable $e) {
+            return '';
+        }
+    }
+
+    /** The gate is open and AiConnector routes the project's bot to a ready profile. */
+    public static function isReadyFor($container, int $projectId): bool
+    {
+        return self::isReady($container) && self::botProfile($container, $projectId) !== '';
+    }
+
+    /** The gate is open for the project and the project has its bot switched on. */
     public static function isOpenFor($container, int $projectId): bool
     {
-        return (new ProjectSettings($container, $projectId))->botEnabled() && self::isReady($container);
+        return (new ProjectSettings($container, $projectId))->botEnabled() && self::isReadyFor($container, $projectId);
+    }
+
+    /** AiConnector 1.4.0's routing API, feature-detected (method_exists autoloads, never fatals). */
+    private static function routingPresent(): bool
+    {
+        return method_exists(ProviderRegistry::class, 'resolve');
     }
 
     private static function installedConnectorVersion($container): ?string

@@ -28,6 +28,7 @@ use ChatParts\Model\ToolState;
 use InvalidArgumentException;
 use Kanboard\Core\Base;
 use Kanboard\Plugin\AgentChat\Model\AccessPolicy;
+use Kanboard\Plugin\AgentChat\Model\AiGate;
 use Kanboard\Plugin\AgentChat\Model\FileModel;
 use Kanboard\Plugin\AgentChat\Model\LimitsSettings;
 use Kanboard\Plugin\AgentChat\Model\MessageModel;
@@ -62,10 +63,11 @@ use Pimple\Container;
  * answer, and the real error goes to the log, never to the message or the run row.
  *
  * Callers claim the run first (RunModel::claim for a stream; runToCompletion claims by id), so
- * a run is answered once. The provider is AiConnector's for the project's profile, with its
- * HTTP requests held to IDLE_TIMEOUT between chunks and the run time limit plus
- * PROVIDER_SLACK_SECONDS in all; a provider in the container under PROVIDER_OVERRIDE replaces
- * it (tests).
+ * a run is answered once. The provider is AiConnector's for the profile its routing picks for
+ * agentchat.bot in the room's project (AiGate::botProfile; no ready profile ends the run as
+ * "unavailable" with no provider call), with its HTTP requests held to IDLE_TIMEOUT between
+ * chunks and the run time limit plus PROVIDER_SLACK_SECONDS in all; a provider in the
+ * container under PROVIDER_OVERRIDE replaces it (tests).
  */
 class BotRunner extends Base
 {
@@ -109,8 +111,21 @@ class BotRunner extends Base
         return $this->run($runId, new StoreSink($this->container, (int) $run['message_id'], $runId));
     }
 
-    /** The project's provider, its requests bounded by the run time limit. */
-    public function provider(?string $profile): ProviderInterface
+    /**
+     * The provider for the project's bot: the profile AiConnector routes agentchat.bot to for
+     * the project (or the override), or null when routing has no ready profile.
+     */
+    public function providerFor(int $projectId): ?ProviderInterface
+    {
+        $profile = AiGate::botProfile($this->container, $projectId);
+        if ($profile === '') {
+            return null;
+        }
+        return $this->providerOverride ?? $this->provider($profile);
+    }
+
+    /** The profile's provider, its requests bounded by the run time limit. */
+    public function provider(string $profile): ProviderInterface
     {
         $provider = (new ProviderRegistry($this->container))->buildProvider($profile);
         if ($provider instanceof AbstractProvider) {
@@ -154,7 +169,11 @@ class BotRunner extends Base
         try {
             if (! (new AccessPolicy($this->container))->canView($askerId, $projectId)) {
                 $errorCode = 'forbidden';
-            } elseif (! $token->isCancelled()) {
+            } elseif ($token->isCancelled()) {
+                // Stopped before it started: outcome() reads the stop.
+            } elseif (($provider = $this->providerFor($projectId)) === null) {
+                $errorCode = 'unavailable';
+            } else {
                 $taskId = $draft['visibility'] === 'private' && $draft['task_id'] ? (int) $draft['task_id'] : null;
                 $scope = new AskerScope($this->container, $askerId, $projectId, $taskId);
                 $tools = ChatAgent::readTools($scope, $sources);
@@ -170,7 +189,6 @@ class BotRunner extends Base
                 } else {
                     $history = $fit['history'];
                     $sourceCap = new SourceCap($fit['sources_cap'], static fn (string $text): int => $budget->tokens($text, $projectId), $sources);
-                    $provider = $this->providerOverride ?? $this->provider((new ProjectSettings($this->container, $projectId))->aiProfile());
                     $model = $provider->getModel();
                     [$question, $imageBytesTokens] = $this->question($questionText, $images, $askerId, (int) $run['room_id'], $runId);
                     $limits = new LimitsSettings($this->container);
@@ -388,7 +406,12 @@ class BotRunner extends Base
     {
         $failed = t('The bot could not answer.');
         if ($errorCode !== null) {
-            return [MessageStatus::Error, 'error', $errorCode === 'too_long' ? t('Your message is too long for this model.') : $failed, $errorCode];
+            $text = match ($errorCode) {
+                'too_long' => t('Your message is too long for this model.'),
+                'unavailable' => t('The bot is not available here.'),
+                default => $failed,
+            };
+            return [MessageStatus::Error, 'error', $text, $errorCode];
         }
         // The token's last read, not a new one: a stop the agent never saw ends nothing.
         if ($token->stopRequest() !== 0) {

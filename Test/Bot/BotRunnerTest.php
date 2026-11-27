@@ -87,6 +87,7 @@ class BotRunnerTest extends Base
         $this->container['configModel']->save([
             'aiconnector_profiles' => json_encode([['id' => 'p1', 'label' => 'Test', 'provider' => 'anthropic', 'model' => 'claude-sonnet-5-5']]),
             'aiconnector_default' => 'p1',
+            'aiconnector_key_p1' => 'sk-test-fake-key',
             \Kanboard\Plugin\AiConnector\Model\ModelCatalog::CACHE_KEY => json_encode(['p1|claude-sonnet-5-5' => ['context_window' => $tokens, 'source' => 'test', 'verified_at' => time()]]),
         ]);
         $this->container['memoryCache']->flush();
@@ -628,6 +629,39 @@ class BotRunnerTest extends Base
         $this->assertCount(0, $provider->calls);
         $this->assertSame(MessageStatus::Submitted, $message->status);
         $this->assertSame('running', $this->runRow($runId)['status']);
+    }
+
+    public function testTheBotUsesTheProfileAiConnectorRoutesToTheRoomsProject(): void
+    {
+        $this->container['configModel']->save([
+            'aiconnector_profiles' => json_encode([
+                ['id' => 'p1', 'label' => 'Test', 'provider' => 'anthropic', 'model' => 'claude-sonnet-5-5'],
+                ['id' => 'p2', 'label' => 'Opus', 'provider' => 'anthropic', 'model' => 'claude-opus-5-5', 'available' => true],
+            ]),
+            'aiconnector_key_p2' => 'sk-test-fake-key-2',
+        ]);
+        // The removed bot profile setting names p1; the project's AI route names p2.
+        $this->container['projectMetadataModel']->save($this->project, ['agentchat_ai_profile' => 'p1', 'aiconnector_project_profile' => 'p2']);
+        $this->container['memoryCache']->flush();
+
+        $this->assertSame('claude-opus-5-5', (new BotRunner($this->container))->providerFor($this->project)->getModel());
+    }
+
+    public function testWithNoReadyRouteTheBotIsNotAvailableAndCallsNoProvider(): void
+    {
+        $this->container['configModel']->save(['aiconnector_key_p1' => '']);
+        $this->container['memoryCache']->flush();
+        $runId = $this->ask('@bot anyone there?');
+        $provider = new FakeProvider([[FakeProvider::text('Should not be said.')]]);
+
+        $final = $this->runBot($runId, $provider);
+
+        $this->assertNull((new BotRunner($this->container))->providerFor($this->project));
+        $this->assertSame([], $provider->calls, 'no provider call');
+        $this->assertSame(MessageStatus::Error, $final->status);
+        $this->assertSame('The bot is not available here.', $this->text($final));
+        $this->assertSame('unavailable', json_decode($this->runRow($runId)['usage'], true)['error_code']);
+        $this->assertSame(['final'], $this->eventNames());
     }
 
     public function testProviderRequestsAreHeldToTheRunTimeLimit(): void

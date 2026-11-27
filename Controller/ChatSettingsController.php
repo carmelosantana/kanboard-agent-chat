@@ -9,16 +9,14 @@ use Kanboard\Plugin\AgentChat\Model\AccessPolicy;
 use Kanboard\Plugin\AgentChat\Model\AiGate;
 use Kanboard\Plugin\AgentChat\Model\LimitsSettings;
 use Kanboard\Plugin\AgentChat\Model\ProjectSettings;
-use Kanboard\Plugin\AiConnector\Model\ProviderRegistry;
 
 /**
  * AgentChat's settings pages, plain forms that post back and redirect (PRG).
  *
  *  - project / saveProject (project managers and app admins, AccessPolicy::canManage): the
- *    bot on or off, who may ask it, its AiConnector profile, and whether it sees images.
- *    The profile must be one of ProviderRegistry::listProfiles() ids, or empty for
- *    AiConnector's default; without AiConnector the field is not offered and a stored
- *    profile is left as it is.
+ *    bot on or off, who may ask it, and whether it sees images. The bot's model is not set
+ *    here: AiConnector's model routing picks it (agentchat.bot), so a posted ai_profile is
+ *    ignored.
  *  - limits / saveLimits (app admin): every LimitsSettings value, each a whole number of 1
  *    or more.
  *
@@ -34,7 +32,6 @@ class ChatSettingsController extends BaseController
         $values += [
             'bot_enabled' => $settings->botEnabled(),
             'ask_role' => $settings->askRole(),
-            'ai_profile' => (string) $settings->aiProfile(),
             'bot_images' => $settings->botImages(),
         ];
 
@@ -43,8 +40,7 @@ class ChatSettingsController extends BaseController
             'title' => t('Chat'),
             'values' => $values,
             'errors' => $errors,
-            'profiles' => $this->profiles(),
-            'botReady' => AiGate::isReady($this->container),
+            'botReady' => AiGate::isReadyFor($this->container, (int) $project['id']),
         ]), $status);
     }
 
@@ -52,22 +48,16 @@ class ChatSettingsController extends BaseController
     {
         $project = $this->managedProject();
         $this->checkCSRFForm();
-        $profiles = $this->profiles();
         $askRole = $this->request->getRawValue('ask_role');
-        $profile = $this->request->getRawValue('ai_profile') ?? '';
         $values = [
             'bot_enabled' => $this->request->getRawValue('bot_enabled') === '1',
             'ask_role' => is_string($askRole) ? $askRole : '',
-            'ai_profile' => is_string($profile) ? $profile : '',
             'bot_images' => $this->request->getRawValue('bot_images') === '1',
         ];
 
         $errors = [];
         if (! in_array($values['ask_role'], ProjectSettings::ASK_ROLES, true)) {
             $errors['ask_role'] = [t('Choose who may ask the bot.')];
-        }
-        if ($profiles !== null && (! is_string($profile) || ($profile !== '' && ! array_key_exists($profile, $profiles)))) {
-            $errors['ai_profile'] = [t('Choose one of the AI profiles.')];
         }
         if ($errors !== []) {
             $this->project($values, $errors, 400);
@@ -78,9 +68,6 @@ class ChatSettingsController extends BaseController
         $settings->setBotEnabled($values['bot_enabled']);
         $settings->setAskRole($values['ask_role']);
         $settings->setBotImages($values['bot_images']);
-        if ($profiles !== null) {
-            $settings->setAiProfile($values['ai_profile']);
-        }
         $this->flash->success(t('Settings saved successfully.'));
         $this->response->redirect($this->helper->url->to('ChatSettingsController', 'project', ['project_id' => $project['id'], 'plugin' => 'AgentChat']));
     }
@@ -126,24 +113,6 @@ class ChatSettingsController extends BaseController
     {
         if ($this->userSession->getRole() !== Role::APP_ADMIN) {
             throw new AccessForbiddenException();
-        }
-    }
-
-    /** @return ?array<string, string> profile labels by id, or null without AiConnector */
-    private function profiles(): ?array
-    {
-        if (! AiGate::connectorPresent($this->container)) {
-            return null;
-        }
-        try {
-            $profiles = [];
-            foreach ((new ProviderRegistry($this->container))->listProfiles() as $p) {
-                $profiles[(string) $p['id']] = (string) $p['label'].' ('.$p['model'].')';
-            }
-            return $profiles;
-        } catch (\Throwable $e) {
-            $this->logger->error('AgentChat: AI profiles not listed: '.$e->getMessage());
-            return null;
         }
     }
 }

@@ -71,7 +71,7 @@ class RoomController extends BaseController
             'canAsk' => $canAsk,
             'botImages' => (new ProjectSettings($this->container, (int) $project['id']))->botImages(),
             // Managers learn why there is no bot; everyone else just does not see it.
-            'botUnavailable' => $policy->canManage($userId, (int) $project['id']) && ! AiGate::isReady($this->container),
+            'botUnavailable' => $policy->canManage($userId, (int) $project['id']) && ! AiGate::isReadyFor($this->container, (int) $project['id']),
             'members' => $this->members((int) $project['id'], $canAsk),
         ]));
     }

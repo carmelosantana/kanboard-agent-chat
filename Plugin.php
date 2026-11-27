@@ -7,6 +7,7 @@ use Kanboard\Plugin\AgentChat\Api\AgentChatKnowledgeProcedure;
 use Kanboard\Plugin\AgentChat\Api\AgentChatRoomProcedure;
 use Kanboard\Plugin\AgentChat\Helper\KanboardHost;
 use Kanboard\Plugin\AgentChat\Model\AccessPolicy;
+use Kanboard\Plugin\AgentChat\Model\AiGate;
 use Kanboard\Plugin\AgentChat\Model\ProjectModelWithChatFiles;
 
 class Plugin extends Base
@@ -42,6 +43,11 @@ class Plugin extends Base
         $this->projectAccessMap->add('ChatSettingsController', ['project', 'saveProject'], Role::PROJECT_MANAGER);
         $this->applicationAccessMap->add('ChatSettingsController', ['limits', 'saveLimits'], Role::APP_ADMIN);
         $this->removeChatFilesWithProjects();
+        // AiConnector's model routing picks the bot's profile (AiGate::botProfile); core's hook,
+        // so this is harmless without AiConnector.
+        $this->hook->on('aiconnector:features', fn () => [
+            ['id' => AiGate::FEATURE, 'label' => t('Chat bot'), 'plugin' => 'AgentChat'],
+        ]);
 
         // JSON-RPC: withObject so core wins any name clash (withCallback/withClassAndMethod would shadow core).
         $this->api->getProcedureHandler()->withObject(new AgentChatKnowledgeProcedure($this->container));
@@ -93,7 +99,7 @@ class Plugin extends Base
     public function getPluginName(): string        { return 'AgentChat'; }
     public function getPluginDescription(): string { return t('Project chat rooms for people and agents, with an AI project bot.'); }
     public function getPluginAuthor(): string      { return 'Carmelo Santana'; }
-    public function getPluginVersion(): string     { return '0.1.0'; }
+    public function getPluginVersion(): string     { return '0.2.0'; }
     public function getPluginHomepage(): string    { return 'https://github.com/carmelosantana/kanboard-agent-chat'; }
     public function getCompatibleVersion(): string { return '>=1.2.47'; }
 }

@@ -11,7 +11,7 @@ use Kanboard\Core\Base;
 use Kanboard\Core\Security\Role;
 use Kanboard\Plugin\AgentChat\Model\MessageModel;
 use Kanboard\Plugin\AgentChat\Model\ParticipantResolver;
-use Kanboard\Plugin\AgentChat\Model\ProjectSettings;
+use Kanboard\Plugin\AgentChat\Model\AiGate;
 use Kanboard\Plugin\AgentChat\Model\RoomModel;
 use Kanboard\Plugin\AiConnector\Model\ModelCatalog;
 
@@ -19,7 +19,7 @@ use Kanboard\Plugin\AiConnector\Model\ModelCatalog;
  * What one bot answer puts in the model's context window, and the fit both the composer's
  * ring and the run use, so the two agree.
  *
- * The window is AiConnector's ModelCatalog::getContextWindow() for the project's profile (its
+ * The window is AiConnector's ModelCatalog::getContextWindow() for the bot's routed profile (its
  * own fallback for a model it does not know); tokens are ModelCatalog::countTokens(), never
  * below php-agents' bytes / 4 (tokens()). The window fills in this order: instructions, tool definitions, the drawer's task, history (the
  * last 40 messages, oldest dropped first), sources (held back for tool results and enforced
@@ -219,7 +219,8 @@ class ContextBudget extends Base
     private function profile(int $projectId): ?string
     {
         if (! array_key_exists($projectId, $this->profiles)) {
-            $this->profiles[$projectId] = (new ProjectSettings($this->container, $projectId))->aiProfile();
+            // The profile the bot is routed to; '' (none ready) leaves AiConnector's default.
+            $this->profiles[$projectId] = AiGate::botProfile($this->container, $projectId) ?: null;
         }
         return $this->profiles[$projectId];
     }

@@ -139,34 +139,25 @@ class AccessPolicyTest extends Base
         $settings = new ProjectSettings($this->container, $this->projectId);
         $this->assertTrue($settings->botEnabled());
         $this->assertSame('members', $settings->askRole());
-        $this->assertNull($settings->aiProfile());
         $this->assertTrue($settings->botImages());
 
         $settings->setBotEnabled(false);
         $settings->setBotImages(false);
-        $settings->setAiProfile('p1');
         $settings->setAskRole('everyone');
 
         $meta = $this->container['projectMetadataModel']->getAll($this->projectId);
         $this->assertSame('0', (string) $meta['agentchat_bot_enabled']);
         $this->assertSame('0', (string) $meta['agentchat_bot_images']);
-        $this->assertSame('p1', $meta['agentchat_ai_profile']);
         $this->assertSame('everyone', $meta['agentchat_ask_role']);
 
         $fresh = new ProjectSettings($this->container, $this->projectId);
         $this->assertFalse($fresh->botEnabled());
         $this->assertFalse($fresh->botImages());
-        $this->assertSame('p1', $fresh->aiProfile());
         $this->assertSame('everyone', $fresh->askRole());
 
         $fresh->setBotEnabled(true);
         $this->assertSame('1', (string) $this->container['projectMetadataModel']->get($this->projectId, 'agentchat_bot_enabled'));
         $this->assertTrue($fresh->botEnabled());
-
-        $fresh->setAiProfile('');
-        $this->assertNull($fresh->aiProfile());
-        $fresh->setAiProfile(null);
-        $this->assertNull($fresh->aiProfile());
 
         // Settings are per project.
         $other = (int) $this->container['projectModel']->create(['name' => 'Other']);

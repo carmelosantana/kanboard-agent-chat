@@ -6,13 +6,14 @@ use InvalidArgumentException;
 
 /**
  * Per-project AgentChat settings, stored in Kanboard's project_metadata.
- * Booleans are stored as "1"/"0"; unknown stored values read as the default.
+ * Booleans are stored as "1"/"0"; unknown stored values read as the default. The bot's AI
+ * profile is not here: AiConnector's model routing picks it (AiGate::botProfile), and a stored
+ * agentchat_ai_profile from 0.1.0 is ignored.
  */
 final class ProjectSettings
 {
     public const BOT_ENABLED = 'agentchat_bot_enabled';
     public const ASK_ROLE = 'agentchat_ask_role';
-    public const AI_PROFILE = 'agentchat_ai_profile';
     public const BOT_IMAGES = 'agentchat_bot_images';
 
     /** Who may ask the bot: managers only, members and managers (default), or everyone who can view. */
@@ -34,13 +35,6 @@ final class ProjectSettings
         return in_array($role, self::ASK_ROLES, true) ? $role : self::DEFAULT_ASK_ROLE;
     }
 
-    /** The AiConnector profile id the bot uses, or null for AiConnector's default. */
-    public function aiProfile(): ?string
-    {
-        $profile = $this->read(self::AI_PROFILE);
-        return $profile === '' ? null : $profile;
-    }
-
     /** Whether images are sent to the bot (they always stay in the room for people). */
     public function botImages(): bool
     {
@@ -58,15 +52,6 @@ final class ProjectSettings
             throw new InvalidArgumentException('Ask role must be one of: '.implode(', ', self::ASK_ROLES).'.');
         }
         $this->write(self::ASK_ROLE, $role);
-    }
-
-    public function setAiProfile(?string $profile): void
-    {
-        if ($profile === null || $profile === '') {
-            $this->container['projectMetadataModel']->remove($this->projectId, self::AI_PROFILE);
-            return;
-        }
-        $this->write(self::AI_PROFILE, $profile);
     }
 
     public function setBotImages(bool $on): void

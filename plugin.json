@@ -1,7 +1,7 @@
 {
     "name": "AgentChat",
     "description": "Project chat rooms for people and agents, with an AI project bot that answers from the board and the project's knowledge.",
-    "version": "0.1.0",
+    "version": "0.2.0",
     "author": "Carmelo Santana",
     "homepage": "https://github.com/carmelosantana/kanboard-agent-chat",
     "license": "MIT",
@@ -9,7 +9,7 @@
     "php_version": ">=8.4",
     "requires": [],
     "recommends": [
-        { "plugin": "AiConnector", "min_version": "1.2.0", "reason": "Project bot answers" },
+        { "plugin": "AiConnector", "min_version": "1.4.0", "reason": "Project bot answers" },
         { "plugin": "Agents", "min_version": "0.5.0", "reason": "Agent badges" }
     ]
 }
