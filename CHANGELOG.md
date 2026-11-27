@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.2.0 — Unreleased
+
+- The project bot uses AiConnector's model routing: AgentChat registers the AI feature
+  `agentchat.bot` ("Chat bot"), and the bot answers on the profile AiConnector resolves for the
+  room's project (its "AI" page, the Model routing assignments, then the global default). There is
+  no picker for the bot. With no ready profile for the project the bot is unavailable there: the
+  gate closes, managers see the notice, and a run that starts anyway ends as "The bot is not
+  available here." without calling a provider.
+- Removed the "AI profile" field from the project's Chat settings; a posted `ai_profile` is ignored.
+  A profile saved by 0.1.0 (`agentchat_ai_profile`) is left in place and ignored: re-pick it on the
+  project's "AI" page.
+- Requires AiConnector 1.4.0 or later for the bot (was 1.2.0); without its routing API the bot stays
+  off.
+
 ## 0.1.0 — 2026-11-19
 
 - First release: a Chat tab on every project, one room per project for people and agents, refreshed

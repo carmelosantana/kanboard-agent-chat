@@ -45,7 +45,7 @@ AgentChat recommends, but does not require:
 
 | Plugin | Minimum | Adds |
 |---|---|---|
-| [AiConnector](https://github.com/carmelosantana/kanboard-ai-connector) | `1.2.0` | the project bot (AiConnector 1.2.0 bundles php-agents 0.17) |
+| [AiConnector](https://github.com/carmelosantana/kanboard-ai-connector) | `1.4.0` | the project bot, on the model AiConnector's routing picks (1.4.0 adds model routing and bundles php-agents 0.17+) |
 | [Agents](https://github.com/carmelosantana/kanboard-agents) | `0.5.0` | Agent badges on agents' messages and an Agents group in the rail |
 
 Online dots from [Presence](https://github.com/carmelosantana/kanboard-presence) are not drawn in
@@ -96,11 +96,17 @@ For project managers and app admins.
 |---|---|---|
 | The project bot answers @bot and the task drawer | on | off removes the bot from this project |
 | Who may ask the bot | Members and managers | Managers only / Members and managers / Everyone with access, viewers included |
-| AI profile | AiConnector's default | which AiConnector profile (provider and model) answers here; listed only when AiConnector is installed |
 | Send images to the bot | on | off keeps images in the chat for people while the bot answers from the text alone; the composer then says "The bot won't see images" |
 
-Stored in `project_metadata` as `agentchat_bot_enabled`, `agentchat_ask_role`, `agentchat_ai_profile`
-and `agentchat_bot_images`.
+Stored in `project_metadata` as `agentchat_bot_enabled`, `agentchat_ask_role` and
+`agentchat_bot_images`.
+
+The bot's model is not set here. AgentChat registers the AI feature `agentchat.bot` ("Chat bot") with
+AiConnector, and AiConnector's model routing picks its profile for the room's project: the project's
+"AI" page, then the feature's or AgentChat's assignment in Settings → AI Connector → Model routing,
+then the global default. There is no picker for the bot. A project whose route has no ready profile
+has no bot, and its managers see the unavailable notice. A bot profile saved by AgentChat 0.1.0
+(`agentchat_ai_profile`) is left in place and ignored.
 
 ### Instance: Settings → Chat limits
 
@@ -277,8 +283,9 @@ error within the run time limit plus a grace period.
 
 ## Without AiConnector
 
-The bot needs AiConnector `1.2.0` or later with a configured provider. Without it (absent, too old,
-or no provider ready), or with the bot switched off for a project:
+The bot needs AiConnector `1.4.0` or later, with a ready profile routed to `agentchat.bot` for the
+project. Without it (absent, too old, or no ready profile), or with the bot switched off for a
+project:
 
 - **The bot UI is gone**: no `@bot` in the placeholder or the mention picker, no "Ask the bot" button
   on tasks and no context ring. When AiConnector is the reason, project managers see a notice on the
